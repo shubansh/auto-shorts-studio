@@ -1,11 +1,64 @@
 import logging
 import json
 import os
+import wave
+import io
+import numpy as np
 import torch
 import ctranslate2
 from faster_whisper import WhisperModel
+import faster_whisper.audio
+import faster_whisper.transcribe
 
 logger = logging.getLogger(__name__)
+
+def load_wav_file(wav_path: str) -> np.ndarray:
+    """Loads 16kHz mono WAV file directly into float32 numpy array without PyAV."""
+    with wave.open(wav_path, "rb") as wf:
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
+        audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        return audio
+
+def safe_decode_audio(input_file, sampling_rate=16000, split_stereo=False):
+    """
+    Safe replacement for faster_whisper.audio.decode_audio.
+    Fixes TypeError: open() got an unexpected keyword argument 'metadata_errors' in PyAV.
+    """
+    if isinstance(input_file, np.ndarray):
+        return input_file
+
+    if isinstance(input_file, str) and input_file.lower().endswith(".wav") and os.path.exists(input_file):
+        try:
+            return load_wav_file(input_file)
+        except Exception as e:
+            logger.warning(f"Failed to read WAV via wave module: {e}")
+
+    try:
+        import av
+        with av.open(input_file, mode="r") as container:
+            resampler = av.audio.resampler.AudioResampler(
+                format="s16",
+                layout="mono" if not split_stereo else "stereo",
+                rate=sampling_rate,
+            )
+            raw_buffer = io.BytesIO()
+            dtype = None
+            for frame in container.decode(audio=0):
+                resampled = resampler.resample(frame)
+                for r_frame in resampled:
+                    arr = r_frame.to_ndarray()
+                    dtype = arr.dtype
+                    raw_buffer.write(arr)
+            audio = np.frombuffer(raw_buffer.getbuffer(), dtype=dtype).astype(np.float32) / 32768.0
+            return audio
+    except Exception as ex:
+        logger.error(f"Error in safe_decode_audio: {ex}")
+        raise ex
+
+# Apply patch to faster_whisper
+faster_whisper.audio.decode_audio = safe_decode_audio
+faster_whisper.transcribe.decode_audio = safe_decode_audio
 
 class AudioTranscriber:
     def __init__(self, model_size="small", device=None, compute_type=None):
@@ -27,11 +80,18 @@ class AudioTranscriber:
     def transcribe(self, audio_path: str, language=None) -> dict:
         """
         Transcribes audio with word-level timestamps.
-        Returns a dictionary with full_text and detailed segments.
+        Passes loaded float32 numpy array to bypass any PyAV container errors.
         """
         logger.info(f"Starting transcription for {audio_path}...")
+        
+        # Load audio into numpy array directly
+        if os.path.exists(audio_path) and audio_path.lower().endswith(".wav"):
+            audio_input = load_wav_file(audio_path)
+        else:
+            audio_input = audio_path
+
         segments_generator, info = self.model.transcribe(
-            audio_path,
+            audio_input,
             language=language,
             word_timestamps=True,
             vad_filter=True, # Skip silences
