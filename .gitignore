@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.mp4
+*.wav
+*.ass
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/audio/*
+!storage/audio/.gitkeep
+storage/cache/*
+!storage/cache/.gitkeep
+storage/outputs/*
+!storage/outputs/.gitkeep
+.env
+.venv/
