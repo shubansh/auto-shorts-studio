@@ -2,7 +2,27 @@ import os
 import sys
 import json
 import logging
+import socket
+import asyncio
 from PIL import Image, ImageDraw
+
+# Windows Python 3.13 AsyncIO Fix: Prevent WinError 10054 ConnectionResetError
+if sys.platform == "win32":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+        _orig_call_conn_lost = _ProactorBasePipeTransport._call_connection_lost
+        def _safe_call_connection_lost(self, exc=None):
+            try:
+                _orig_call_conn_lost(self, exc)
+            except (ConnectionResetError, OSError):
+                pass
+        _ProactorBasePipeTransport._call_connection_lost = _safe_call_connection_lost
+    except Exception:
+        pass
 
 # Ensure UTF-8 output on Windows
 if sys.platform == "win32":
