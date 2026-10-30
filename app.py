@@ -4,6 +4,7 @@ import json
 import logging
 import socket
 import asyncio
+import base64
 from PIL import Image, ImageDraw
 
 # Windows Python 3.13 AsyncIO Fix: Prevent WinError 10054 ConnectionResetError
@@ -38,20 +39,21 @@ if sys.platform == "win32":
             pass
 
 import streamlit as st
+import streamlit.components.v1 as components
 from core.audio import extract_preview_frame, extract_timeline_thumbnails, get_video_info, download_youtube_video
 
 # -------------------------------------------------------------
 # STREAMLIT PAGE CONFIGURATION
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="POWDER Studio AI - Full UI/UX Suite",
+    page_title="POWDER Studio AI - Interactive Gaming Shorts Suite",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # -------------------------------------------------------------
-# HIGH-FIDELITY POWDER.GG GAMING SAAS CSS
+# HIGH-FIDELITY GAMING SAAS CSS
 # -------------------------------------------------------------
 st.markdown("""
 <style>
@@ -81,7 +83,6 @@ st.markdown("""
         border-right: 1px solid var(--border-color) !important;
     }
 
-    /* Logo Styling */
     .powder-brand {
         display: flex;
         align-items: center;
@@ -111,7 +112,6 @@ st.markdown("""
         margin: 0;
     }
 
-    /* Section Subheaders */
     .sidebar-heading {
         color: var(--text-secondary);
         font-size: 11px;
@@ -121,7 +121,6 @@ st.markdown("""
         margin: 14px 0 6px 0;
     }
 
-    /* Glass Cards */
     .powder-card {
         background: var(--bg-card);
         border: 1px solid var(--border-color);
@@ -135,7 +134,6 @@ st.markdown("""
         background: var(--bg-card-hover);
     }
 
-    /* Metric Stat Badges */
     .stat-box {
         background: #111422;
         border: 1px solid var(--border-color);
@@ -157,7 +155,6 @@ st.markdown("""
         letter-spacing: 0.8px;
     }
 
-    /* Virality & Tag Pills */
     .virality-badge {
         background: rgba(204, 255, 0, 0.15);
         color: var(--powder-neon);
@@ -188,7 +185,6 @@ st.markdown("""
         border: 1px solid rgba(139, 92, 246, 0.4);
     }
 
-    /* Neon Buttons */
     .stButton>button[kind="primary"] {
         background-color: var(--powder-neon) !important;
         color: #000000 !important;
@@ -205,7 +201,6 @@ st.markdown("""
         transform: translateY(-1px) !important;
     }
 
-    /* Dashed Upload Box */
     .upload-zone {
         background: #111420;
         border: 2px dashed #2a334a;
@@ -219,7 +214,6 @@ st.markdown("""
         border-color: var(--powder-neon);
     }
 
-    /* Header Bar */
     .top-header {
         display: flex;
         justify-content: space-between;
@@ -250,7 +244,7 @@ st.markdown("""
 # SESSION STATE INITIALIZATION
 # -------------------------------------------------------------
 if "current_nav" not in st.session_state:
-    st.session_state["current_nav"] = "Dashboard"
+    st.session_state["current_nav"] = "Studio" if "video_path" in st.session_state and st.session_state["video_path"] else "Dashboard"
 if "video_path" not in st.session_state:
     st.session_state["video_path"] = None
 if "preview_frame" not in st.session_state:
@@ -265,6 +259,18 @@ if "selected_clip_indices" not in st.session_state:
     st.session_state["selected_clip_indices"] = []
 if "active_layout" not in st.session_state:
     st.session_state["active_layout"] = "gaming_split"
+
+# Default Alignment Presets
+if "fc_x" not in st.session_state: st.session_state["fc_x"] = 65
+if "fc_y" not in st.session_state: st.session_state["fc_y"] = 5
+if "fc_w" not in st.session_state: st.session_state["fc_w"] = 32
+if "fc_h" not in st.session_state: st.session_state["fc_h"] = 40
+if "gp_x" not in st.session_state: st.session_state["gp_x"] = 15
+if "gp_y" not in st.session_state: st.session_state["gp_y"] = 0
+if "gp_w" not in st.session_state: st.session_state["gp_w"] = 70
+if "gp_h" not in st.session_state: st.session_state["gp_h"] = 100
+if "snapshot_ts" not in st.session_state: st.session_state["snapshot_ts"] = 45.0
+
 if "active_gaming_config" not in st.session_state:
     st.session_state["active_gaming_config"] = None
 if "active_single_config" not in st.session_state:
@@ -275,6 +281,15 @@ if "enable_emojis" not in st.session_state:
     st.session_state["enable_emojis"] = True
 if "results" not in st.session_state:
     st.session_state["results"] = []
+
+# Paths
+base_dir = os.path.dirname(os.path.abspath(__file__))
+upload_dir = os.path.join(base_dir, "storage", "uploads")
+outputs_dir = os.path.join(base_dir, "storage", "outputs")
+cache_dir = os.path.join(base_dir, "storage", "cache")
+os.makedirs(upload_dir, exist_ok=True)
+os.makedirs(outputs_dir, exist_ok=True)
+os.makedirs(cache_dir, exist_ok=True)
 
 # -------------------------------------------------------------
 # HELPER: DUAL PREVIEW MOCKUP GENERATOR
@@ -322,8 +337,14 @@ def generate_mobile_preview(frame_path: str, gaming_config: dict, target_w: int 
         logging.error(f"Failed to generate mobile preview: {e}")
         return None
 
+def get_base64_encoded_image(image_path: str) -> str:
+    if image_path and os.path.exists(image_path):
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    return ""
+
 # -------------------------------------------------------------
-# LEFT SIDEBAR NAVIGATION (MATCHING BLUEPRINT FLOW)
+# LEFT SIDEBAR NAVIGATION
 # -------------------------------------------------------------
 with st.sidebar:
     st.markdown("""
@@ -351,9 +372,6 @@ with st.sidebar:
             break
 
     selected_nav = st.radio("Navigation", nav_options, index=curr_idx, label_visibility="collapsed")
-    
-    # Clean nav name
-    clean_key = selected_nav.split(" ")[-1]
     if "Dashboard" in selected_nav: st.session_state["current_nav"] = "Dashboard"
     elif "Capture" in selected_nav: st.session_state["current_nav"] = "Capture"
     elif "Studio" in selected_nav: st.session_state["current_nav"] = "Studio"
@@ -362,7 +380,6 @@ with st.sidebar:
     elif "Library" in selected_nav: st.session_state["current_nav"] = "Library"
     elif "Settings" in selected_nav: st.session_state["current_nav"] = "Settings"
 
-    # Real-time System Status Pill
     st.markdown('<div class="sidebar-heading">Hardware Status</div>', unsafe_allow_html=True)
     st.markdown("""
     <div style="background: #111420; border: 1px solid #1e2436; border-radius: 8px; padding: 10px; margin-bottom: 12px;">
@@ -388,23 +405,13 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-# Directory Paths
-base_dir = os.path.dirname(os.path.abspath(__file__))
-upload_dir = os.path.join(base_dir, "storage", "uploads")
-outputs_dir = os.path.join(base_dir, "storage", "outputs")
-cache_dir = os.path.join(base_dir, "storage", "cache")
-os.makedirs(upload_dir, exist_ok=True)
-os.makedirs(outputs_dir, exist_ok=True)
-os.makedirs(cache_dir, exist_ok=True)
-
 
 # =============================================================
-# SCREEN 2.1: DASHBOARD (HOME SCREEN)
+# SCREEN 2.1: DASHBOARD
 # =============================================================
 if st.session_state["current_nav"] == "Dashboard":
     st.markdown('<div class="top-header"><h2 class="top-title">🏠 Studio Dashboard</h2><div class="badge-gpu">⚡ NVIDIA RTX 3050 Online</div></div>', unsafe_allow_html=True)
 
-    # 4 Top Stats Cards (from Blueprint 2.1)
     s1, s2, s3, s4 = st.columns(4)
     rendered_shorts = [f for f in os.listdir(outputs_dir) if f.lower().endswith(".mp4") and not f.startswith(".")]
     uploaded_vids = [f for f in os.listdir(upload_dir) if f.lower().endswith((".mp4", ".mov", ".mkv", ".webm")) and not f.endswith(".part")]
@@ -420,14 +427,13 @@ if st.session_state["current_nav"] == "Dashboard":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Quick Start Action Banner
     q_col1, q_col2 = st.columns([2, 1])
     with q_col1:
         st.markdown("""
         <div class="powder-card">
             <h3 style="margin: 0 0 8px 0; color: #f8fafc; font-size: 18px;">⚡ Turn Gaming Moments into Viral 9:16 Shorts</h3>
             <p style="color: #94a3b8; font-size: 13px; margin: 0 0 16px 0;">
-                Connect YouTube / Twitch, align your facecam & gameplay boxes live, and let Faster-Whisper + Ollama find your best kills and clutch moments.
+                Connect YouTube / Twitch, scrub to the gameplay scene, align your facecam & gameplay with mouse drag, and render high-retention shorts in seconds.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -447,15 +453,14 @@ if st.session_state["current_nav"] == "Dashboard":
         <div class="powder-card">
             <h4 style="margin: 0 0 8px 0; color: #ccff00; font-size: 15px;">🎮 Supported Formats & Layouts</h4>
             <div style="font-size: 12px; color: #cbd5e1; line-height: 1.8;">
-                ✓ Powder.gg Split (Facecam Top + Gameplay Bottom)<br>
-                ✓ Single Screen Portrait (AI Face Tracking)<br>
-                ✓ Gameplay-Only (Center / Custom 9:16 Crop)<br>
-                ✓ Cinematic Ambient Blurred Background
+                ✓ Mouse Drag-and-Drop Crop Boxes<br>
+                ✓ Gameplay Scene Timestamp Scrubber<br>
+                ✓ Timeline In/Out Custom Trimmer<br>
+                ✓ 60 FPS NVIDIA NVENC Encoding
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    # Recent Sessions Grid
     st.markdown('<h4 style="color: #cbd5e1; margin: 24px 0 12px 0;">Recent Video Sessions</h4>', unsafe_allow_html=True)
     if uploaded_vids:
         v_cols = st.columns(min(4, len(uploaded_vids)))
@@ -477,8 +482,11 @@ if st.session_state["current_nav"] == "Dashboard":
                         meta = get_video_info(full_vid_p)
                         st.session_state["video_meta"] = meta
                         v_base = os.path.splitext(vid_file)[0]
+                        # Default snapshot to 45s (gameplay) or 20%
+                        snap_s = min(45.0, meta["duration"] * 0.2)
+                        st.session_state["snapshot_ts"] = snap_s
                         p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
-                        extract_preview_frame(full_vid_p, p_frame, timestamp=10.0)
+                        extract_preview_frame(full_vid_p, p_frame, timestamp=snap_s)
                         st.session_state["preview_frame"] = p_frame
                         st.session_state["timeline_thumbs"] = extract_timeline_thumbnails(full_vid_p, cache_dir, meta["duration"], count=6)
                         st.session_state["current_nav"] = "Studio"
@@ -486,7 +494,7 @@ if st.session_state["current_nav"] == "Dashboard":
 
 
 # =============================================================
-# SCREEN 2.2: CAPTURE & INGEST (IMPORT MODAL - BLUEPRINT 2.2)
+# SCREEN 2.2: CAPTURE & INGEST
 # =============================================================
 elif st.session_state["current_nav"] == "Capture":
     st.markdown('<div class="top-header"><h2 class="top-title">📥 Ingest & Game Capture</h2><div class="badge-gpu">Ready</div></div>', unsafe_allow_html=True)
@@ -522,7 +530,6 @@ elif st.session_state["current_nav"] == "Capture":
         with col_btn:
             run_import = st.button("⚡ Ingest", type="primary", use_container_width=True)
 
-        # Existing Recordings Dropdown
         existing_vids = [f for f in os.listdir(upload_dir) if f.lower().endswith((".mp4", ".mov", ".mkv", ".webm")) and not f.endswith(".part")]
         if existing_vids:
             st.markdown('<div style="margin-top: 26px; font-size: 13px; font-weight: 700; color: #cbd5e1;">Or Pick Existing Source:</div>', unsafe_allow_html=True)
@@ -534,14 +541,15 @@ elif st.session_state["current_nav"] == "Capture":
                     meta = get_video_info(target_p)
                     st.session_state["video_meta"] = meta
                     v_base = os.path.splitext(chosen_local)[0]
+                    snap_s = min(45.0, meta["duration"] * 0.2)
+                    st.session_state["snapshot_ts"] = snap_s
                     p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
-                    extract_preview_frame(target_p, p_frame, timestamp=10.0)
+                    extract_preview_frame(target_p, p_frame, timestamp=snap_s)
                     st.session_state["preview_frame"] = p_frame
                     st.session_state["timeline_thumbs"] = extract_timeline_thumbnails(target_p, cache_dir, meta["duration"], count=6)
                     st.session_state["current_nav"] = "Studio"
                     st.rerun()
 
-        # Execute Import
         if run_import or uploaded_file:
             chosen_target = None
             if uploaded_file:
@@ -561,8 +569,10 @@ elif st.session_state["current_nav"] == "Capture":
                     meta = get_video_info(chosen_target)
                     st.session_state["video_meta"] = meta
                     v_base = os.path.splitext(os.path.basename(chosen_target))[0]
+                    snap_s = min(45.0, meta["duration"] * 0.2)
+                    st.session_state["snapshot_ts"] = snap_s
                     p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
-                    extract_preview_frame(chosen_target, p_frame, timestamp=10.0)
+                    extract_preview_frame(chosen_target, p_frame, timestamp=snap_s)
                     st.session_state["preview_frame"] = p_frame
                     st.session_state["timeline_thumbs"] = extract_timeline_thumbnails(chosen_target, cache_dir, meta["duration"], count=6)
                     st.session_state["discovered_clips"] = []
@@ -573,7 +583,7 @@ elif st.session_state["current_nav"] == "Capture":
 
 
 # =============================================================
-# SCREEN 2.4 & 2.5: STUDIO & CLIPS (CORE POWDER.GG WORKSPACE)
+# SCREEN 2.4 & 2.5: STUDIO, CLIPS & INTERACTIVE IN/OUT CUTTER
 # =============================================================
 elif st.session_state["current_nav"] == "Studio":
     if not st.session_state["video_path"]:
@@ -600,19 +610,15 @@ elif st.session_state["current_nav"] == "Studio":
         </div>
         """, unsafe_allow_html=True)
 
-        # 2-Column Powder Layout
         col_player, col_moments = st.columns([13, 8], gap="medium")
 
-        # -----------------------------------------------------
-        # LEFT: 16:9 VIDEO PLAYER & FILMSTRIP TIMELINE
-        # -----------------------------------------------------
+        # LEFT COLUMN: PLAYER, TIMELINE & CUSTOM CUTTER
         with col_player:
-            # Action Toolbar above player
             t1, t2, t3 = st.columns([1.2, 1.4, 2.4])
             with t1:
                 st.markdown('<div class="virality-badge">📱 9:16 Active</div>', unsafe_allow_html=True)
             with t2:
-                if st.button("🎛️ Edit Layout Live", use_container_width=True):
+                if st.button("🎛️ Drag & Drop Layout", use_container_width=True):
                     st.session_state["current_nav"] = "Layout"
                     st.rerun()
             with t3:
@@ -623,7 +629,7 @@ elif st.session_state["current_nav"] == "Studio":
             # Main Video Player
             st.video(v_path)
 
-            # Filmstrip Timeline Bar (Blueprint 2.5)
+            # Filmstrip Timeline Bar
             st.markdown('<div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-top: 8px;">TIMELINE FILMSTRIP</div>', unsafe_allow_html=True)
             thumbs = st.session_state.get("timeline_thumbs", [])
             if thumbs:
@@ -633,18 +639,112 @@ elif st.session_state["current_nav"] == "Studio":
                         if os.path.exists(t["path"]):
                             st.image(t["path"], caption=f"{int(t['timestamp'])}s", use_container_width=True)
 
-        # -----------------------------------------------------
-        # RIGHT: VIRAL MOMENTS & CLIPS (BLUEPRINT 2.4)
-        # -----------------------------------------------------
+            # -------------------------------------------------
+            # INTERACTIVE CLIP IN/OUT CUTTER (USER REQUEST)
+            # -------------------------------------------------
+            st.markdown("""
+            <div class="powder-card" style="margin-top: 16px;">
+                <h4 style="margin: 0 0 6px 0; color: #ccff00; font-size: 15px;">✂️ Interactive Timeline Clip Cutter (Mark In/Out)</h4>
+                <p style="color: #94a3b8; font-size: 12px; margin: 0 0 10px 0;">
+                    Select custom start and end timestamps directly to generate an exact short, bypassing full video AI scan!
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            default_cut_s = int(min(45, v_dur * 0.1))
+            default_cut_e = int(min(v_dur, default_cut_s + 35))
+            
+            c_range = st.slider(
+                "Mark In / Out Range (Seconds):",
+                0, int(v_dur),
+                value=(default_cut_s, default_cut_e),
+                step=1
+            )
+            cut_in, cut_out = c_range
+            cut_duration = cut_out - cut_in
+
+            c_info1, c_info2 = st.columns([2, 1])
+            with c_info1:
+                in_fmt = f"{int(cut_in//60):02d}:{int(cut_in%60):02d}"
+                out_fmt = f"{int(cut_out//60):02d}:{int(cut_out%60):02d}"
+                st.markdown(f"**Marked Cut:** `{in_fmt}` ──▶ `{out_fmt}` (Duration: **{cut_duration}s**)")
+            with c_info2:
+                if st.button("📸 Grab Frame at Cut Start", use_container_width=True):
+                    st.session_state["snapshot_ts"] = float(cut_in)
+                    v_base = os.path.splitext(v_name)[0]
+                    p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                    extract_preview_frame(v_path, p_frame, timestamp=float(cut_in))
+                    st.session_state["preview_frame"] = p_frame
+                    st.success(f"Snapshot updated to {in_fmt}!")
+                    st.rerun()
+
+            cut_layout = st.selectbox(
+                "Layout for this custom cut:",
+                ["🎮 Powder.gg Gaming Split (Facecam Top + Gameplay Bottom)", "📱 Single Screen (Fullscreen Talking/Intro)", "🎬 Ambient Blur Fit"],
+                index=0
+            )
+
+            if st.button(f"⚡ RENDER THIS {cut_duration}s CUT AS 9:16 SHORT (NVENC 60 FPS)", type="primary", use_container_width=True):
+                if cut_duration <= 5:
+                    st.error("Cut duration must be at least 5 seconds!")
+                else:
+                    prog_bar = st.progress(0)
+                    status_lbl = st.empty()
+
+                    def on_progress(title, pct, msg):
+                        prog_bar.progress(int(pct))
+                        status_lbl.markdown(f"**{title} ({pct:.0f}%):** {msg}")
+
+                    try:
+                        from pipeline import ShortsPipeline
+                        pipeline = ShortsPipeline()
+
+                        chosen_clip = [{
+                            "start": float(cut_in),
+                            "end": float(cut_out),
+                            "title": f"Custom Cut ({in_fmt}-{out_fmt})",
+                            "hook_score": 9.5,
+                            "virality_score": 95,
+                            "tags": ["✂️ Custom Cut", "⚡ Clip it"],
+                            "reason": "Direct timeline user selection"
+                        }]
+
+                        act_layout = "gaming_split" if "Gaming Split" in cut_layout else ("crop" if "Single Screen" in cut_layout else "blur_fit")
+                        act_gaming = st.session_state.get("active_gaming_config")
+                        act_single = st.session_state.get("active_single_config")
+                        theme_sel = st.session_state.get("subtitle_theme", "Hormozi Gold (Viral)")
+
+                        with st.spinner("Rendering custom cut with RTX 3050 NVENC..."):
+                            results = pipeline.process(
+                                video_source=v_path,
+                                is_youtube=False,
+                                num_clips=1,
+                                subtitle_theme=theme_sel,
+                                enable_emojis=True,
+                                layout_mode=act_layout,
+                                gaming_config=act_gaming,
+                                single_crop_config=act_single,
+                                preselected_clips=chosen_clip,
+                                progress_callback=on_progress
+                            )
+
+                        st.session_state["results"] = results
+                        st.balloons()
+                        st.success(f"Custom Cut Rendered Successfully!")
+                        st.session_state["current_nav"] = "Library"
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Render Error: {err}")
+
+        # RIGHT COLUMN: AI SUGGESTED MOMENTS
         with col_moments:
             st.markdown("""
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <div style="font-weight: 700; font-size: 15px; color: #f8fafc;">Suggested Moments</div>
+                <div style="font-weight: 700; font-size: 15px; color: #f8fafc;">AI Suggested Moments</div>
                 <div style="font-size: 12px; color: var(--powder-neon); font-weight: 700;">⚡ AI Discovery</div>
             </div>
             """, unsafe_allow_html=True)
 
-            # Event Filter Pills
             st.markdown("""
             <div style="display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px;">
                 <span class="event-tag event-tag-purple">Clip it (3)</span>
@@ -655,13 +755,12 @@ elif st.session_state["current_nav"] == "Studio":
             </div>
             """, unsafe_allow_html=True)
 
-            # Discovery Trigger if not yet run
             if not st.session_state.get("discovered_clips"):
                 st.markdown("""
                 <div class="powder-card">
                     <h4 style="margin: 0 0 8px 0; color: #f8fafc; font-size: 14px;">⚡ AI Highlight Scanner</h4>
                     <p style="color: #94a3b8; font-size: 12px; margin-bottom: 12px;">
-                        Scans transcript audio with Faster-Whisper on GPU & uses Ollama to find viral hooks, clutch gameplay, and laughter.
+                        Scans audio with Faster-Whisper on GPU & uses Ollama to find viral hooks, clutch gameplay, and laughter.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -709,7 +808,6 @@ elif st.session_state["current_nav"] == "Studio":
                         except Exception as ex:
                             st.error(f"Discovery error: {ex}")
 
-            # Display Discovered Clip Cards
             if st.session_state.get("discovered_clips"):
                 clips = st.session_state["discovered_clips"]
                 selected_idxs = []
@@ -740,7 +838,6 @@ elif st.session_state["current_nav"] == "Studio":
 
                 st.session_state["selected_clip_indices"] = selected_idxs
 
-                # BIG NEON BUTTON: CREATE X CLIPS (BLUEPRINT 2.6 & 2.10)
                 num_to_export = len(selected_idxs)
                 st.markdown("<br>", unsafe_allow_html=True)
                 create_btn = st.button(
@@ -791,31 +888,103 @@ elif st.session_state["current_nav"] == "Studio":
 
                     except Exception as err:
                         st.error(f"Render Error: {err}")
-                        st.exception(err)
 
 
 # =============================================================
-# SCREEN 2.7: LAYOUT & TEMPLATES (INTERACTIVE ALIGNMENT)
+# SCREEN 2.7: LAYOUT & TEMPLATES (INTERACTIVE MOUSE DRAG CANVAS)
 # =============================================================
 elif st.session_state["current_nav"] == "Layout":
-    st.markdown('<div class="top-header"><h2 class="top-title">🎛️ Visual Layout & Crop Alignment</h2><div class="badge-gpu">Live Sync</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="top-header"><h2 class="top-title">🎛️ Visual Layout Alignment & Interactive Mouse Canvas</h2><div class="badge-gpu">Live Sync</div></div>', unsafe_allow_html=True)
 
     if not st.session_state["video_path"]:
         st.info("Please load a video in **📥 Capture & Ingest** first.")
     else:
+        v_path = st.session_state["video_path"]
+        v_name = os.path.basename(v_path)
         v_meta = st.session_state["video_meta"]
         v_w = v_meta.get("width", 1920)
         v_h = v_meta.get("height", 1080)
+        v_dur = v_meta.get("duration", 0.0)
 
+        # -----------------------------------------------------
+        # 1. SCENE SCRUBBER (SOLVES INTRO WEBCAM VS GAMEPLAY SCENE!)
+        # -----------------------------------------------------
         st.markdown("""
         <div class="powder-card">
-            <h4 style="margin: 0 0 6px 0; color: #ccff00;">Powder.gg Dual Visual Alignment</h4>
-            <p style="color: #94a3b8; font-size: 13px; margin: 0;">
-                Inspect your actual video frame on the left and see the exact 9:16 mobile mockup on the right in real time.
+            <h4 style="margin: 0 0 6px 0; color: #ccff00; font-size: 15px;">⏱️ Step 1: Scrub to Actual Gameplay Scene</h4>
+            <p style="color: #94a3b8; font-size: 12px; margin: 0 0 10px 0;">
+                If your video starts with a fullscreen webcam intro, scrub the slider to <b>45s or 120s</b> where the actual game + facecam is playing on screen!
             </p>
         </div>
         """, unsafe_allow_html=True)
 
+        sc_col1, sc_col2 = st.columns([3, 1])
+        with sc_col1:
+            scrub_target = st.slider(
+                "Gameplay Scene Timestamp (seconds):",
+                0, int(v_dur),
+                value=int(st.session_state.get("snapshot_ts", 45.0)),
+                step=1
+            )
+        with sc_col2:
+            if st.button("📸 Grab Frame at this Second", type="primary", use_container_width=True):
+                st.session_state["snapshot_ts"] = float(scrub_target)
+                v_base = os.path.splitext(v_name)[0]
+                p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                extract_preview_frame(v_path, p_frame, timestamp=float(scrub_target))
+                st.session_state["preview_frame"] = p_frame
+                st.success(f"Frame updated to {scrub_target}s!")
+                st.rerun()
+
+        # Quick Jump Buttons
+        st.markdown("<div style='font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px;'>Quick Scene Shortcuts:</div>", unsafe_allow_html=True)
+        q1, q2, q3, q4, q5 = st.columns(5)
+        with q1:
+            if st.button("⏱️ Intro (5s)"):
+                st.session_state["snapshot_ts"] = 5.0
+                v_base = os.path.splitext(v_name)[0]
+                p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                extract_preview_frame(v_path, p_frame, timestamp=5.0)
+                st.session_state["preview_frame"] = p_frame
+                st.rerun()
+        with q2:
+            if st.button("🎮 Gameplay (45s)"):
+                st.session_state["snapshot_ts"] = 45.0
+                v_base = os.path.splitext(v_name)[0]
+                p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                extract_preview_frame(v_path, p_frame, timestamp=45.0)
+                st.session_state["preview_frame"] = p_frame
+                st.rerun()
+        with q3:
+            if st.button("🎮 Mid-Game (120s)"):
+                st.session_state["snapshot_ts"] = 120.0
+                v_base = os.path.splitext(v_name)[0]
+                p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                extract_preview_frame(v_path, p_frame, timestamp=120.0)
+                st.session_state["preview_frame"] = p_frame
+                st.rerun()
+        with q4:
+            if st.button("🎮 Clutch (250s)"):
+                st.session_state["snapshot_ts"] = min(v_dur - 10, 250.0)
+                v_base = os.path.splitext(v_name)[0]
+                p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                extract_preview_frame(v_path, p_frame, timestamp=st.session_state["snapshot_ts"])
+                st.session_state["preview_frame"] = p_frame
+                st.rerun()
+        with q5:
+            if st.button("🎮 Late-Match (400s)"):
+                st.session_state["snapshot_ts"] = min(v_dur - 10, 400.0)
+                v_base = os.path.splitext(v_name)[0]
+                p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                extract_preview_frame(v_path, p_frame, timestamp=st.session_state["snapshot_ts"])
+                st.session_state["preview_frame"] = p_frame
+                st.rerun()
+
+        st.markdown("---")
+
+        # -----------------------------------------------------
+        # 2. SCREEN MODE SELECTION
+        # -----------------------------------------------------
         mode_sel = st.radio(
             "Screen Mode:",
             [
@@ -829,55 +998,69 @@ elif st.session_state["current_nav"] == "Layout":
         if "Gaming Split" in mode_sel:
             st.session_state["active_layout"] = "gaming_split"
 
-            col_p, col_tune = st.columns([1, 2])
-            with col_p:
-                preset_name = st.selectbox(
-                    "Streamer Preset:",
-                    [
-                        "Center-Top Facecam (Like Spyki Plays)",
-                        "Top-Right Facecam (Scout, Mortal, Dynamo)",
-                        "Top-Left Facecam",
-                        "Bottom-Right Facecam",
-                        "Bottom-Left Facecam",
-                        "Custom Manual Sliders"
-                    ],
-                    index=0
-                )
+            st.markdown("""
+            <div class="powder-card">
+                <h4 style="margin: 0 0 6px 0; color: #ccff00; font-size: 15px;">🖱️ Step 2: 1-Click Streamer Presets & Mouse Drag Placement</h4>
+                <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+                    Click a preset below or drag the boxes with your mouse on the video canvas to perfectly frame your facecam and gameplay crosshairs!
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
-            presets_dict = {
-                "Center-Top Facecam (Like Spyki Plays)": {"fc_x": 28, "fc_y": 15, "fc_w": 44, "fc_h": 45, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
-                "Top-Right Facecam (Scout, Mortal, Dynamo)": {"fc_x": 65, "fc_y": 5, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
-                "Top-Left Facecam": {"fc_x": 5, "fc_y": 5, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
-                "Bottom-Right Facecam": {"fc_x": 65, "fc_y": 55, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
-                "Bottom-Left Facecam": {"fc_x": 5, "fc_y": 55, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
-                "Custom Manual Sliders": {"fc_x": 30, "fc_y": 10, "fc_w": 40, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100}
-            }
-            vals = presets_dict[preset_name]
+            # 1-Click Preset Buttons
+            p_col1, p_col2, p_col3, p_col4, p_col5 = st.columns(5)
+            with p_col1:
+                if st.button("📌 Top-Right (Scout)", use_container_width=True):
+                    st.session_state["fc_x"], st.session_state["fc_y"], st.session_state["fc_w"], st.session_state["fc_h"] = 65, 5, 32, 40
+                    st.session_state["gp_x"], st.session_state["gp_y"], st.session_state["gp_w"], st.session_state["gp_h"] = 15, 0, 70, 100
+                    st.rerun()
+            with p_col2:
+                if st.button("📌 Top-Left Facecam", use_container_width=True):
+                    st.session_state["fc_x"], st.session_state["fc_y"], st.session_state["fc_w"], st.session_state["fc_h"] = 5, 5, 32, 40
+                    st.session_state["gp_x"], st.session_state["gp_y"], st.session_state["gp_w"], st.session_state["gp_h"] = 15, 0, 70, 100
+                    st.rerun()
+            with p_col3:
+                if st.button("📌 Center-Top (Spyki)", use_container_width=True):
+                    st.session_state["fc_x"], st.session_state["fc_y"], st.session_state["fc_w"], st.session_state["fc_h"] = 28, 15, 44, 45
+                    st.session_state["gp_x"], st.session_state["gp_y"], st.session_state["gp_w"], st.session_state["gp_h"] = 15, 0, 70, 100
+                    st.rerun()
+            with p_col4:
+                if st.button("📌 Bottom-Right", use_container_width=True):
+                    st.session_state["fc_x"], st.session_state["fc_y"], st.session_state["fc_w"], st.session_state["fc_h"] = 65, 55, 32, 40
+                    st.session_state["gp_x"], st.session_state["gp_y"], st.session_state["gp_w"], st.session_state["gp_h"] = 15, 0, 70, 100
+                    st.rerun()
+            with p_col5:
+                if st.button("📌 Bottom-Left", use_container_width=True):
+                    st.session_state["fc_x"], st.session_state["fc_y"], st.session_state["fc_w"], st.session_state["fc_h"] = 5, 55, 32, 40
+                    st.session_state["gp_x"], st.session_state["gp_y"], st.session_state["gp_w"], st.session_state["gp_h"] = 15, 0, 70, 100
+                    st.rerun()
 
-            with col_tune:
-                tune1, tune2 = st.columns(2)
-                with tune1:
+            # Numeric sliders for fine-tuning
+            with st.expander("⚙️ Fine-Tune Sliders (Optional Sub-Pixel Adjustment)"):
+                col_sl1, col_sl2 = st.columns(2)
+                with col_sl1:
                     st.markdown("<b style='color: #00ff78;'>📷 Facecam Box (Top 40%)</b>", unsafe_allow_html=True)
-                    fc_x = st.slider("Facecam X (%)", 0, 100, vals["fc_x"], key="l_fc_x")
-                    fc_y = st.slider("Facecam Y (%)", 0, 100, vals["fc_y"], key="l_fc_y")
-                    fc_w = st.slider("Facecam Width (%)", 15, 70, vals["fc_w"], key="l_fc_w")
-                    fc_h = st.slider("Facecam Height (%)", 15, 70, vals["fc_h"], key="l_fc_h")
-                with tune2:
+                    st.session_state["fc_x"] = st.slider("Facecam X (%)", 0, 100, int(st.session_state["fc_x"]), key="f_sl_x")
+                    st.session_state["fc_y"] = st.slider("Facecam Y (%)", 0, 100, int(st.session_state["fc_y"]), key="f_sl_y")
+                    st.session_state["fc_w"] = st.slider("Facecam Width (%)", 15, 70, int(st.session_state["fc_w"]), key="f_sl_w")
+                    st.session_state["fc_h"] = st.slider("Facecam Height (%)", 15, 70, int(st.session_state["fc_h"]), key="f_sl_h")
+                with col_sl2:
                     st.markdown("<b style='color: #00d2ff;'>🎯 Gameplay Box (Bottom 60%)</b>", unsafe_allow_html=True)
-                    gp_x = st.slider("Gameplay X (%)", 0, 100, vals["gp_x"], key="l_gp_x")
-                    gp_y = st.slider("Gameplay Y (%)", 0, 100, vals["gp_y"], key="l_gp_y")
-                    gp_w = st.slider("Gameplay Width (%)", 30, 100, vals["gp_w"], key="l_gp_w")
-                    gp_h = st.slider("Gameplay Height (%)", 30, 100, vals["gp_h"], key="l_gp_h")
+                    st.session_state["gp_x"] = st.slider("Gameplay X (%)", 0, 100, int(st.session_state["gp_x"]), key="g_sl_x")
+                    st.session_state["gp_y"] = st.slider("Gameplay Y (%)", 0, 100, int(st.session_state["gp_y"]), key="g_sl_y")
+                    st.session_state["gp_w"] = st.slider("Gameplay Width (%)", 30, 100, int(st.session_state["gp_w"]), key="g_sl_w")
+                    st.session_state["gp_h"] = st.slider("Gameplay Height (%)", 30, 100, int(st.session_state["gp_h"]), key="g_sl_h")
 
-            fc_px = int((fc_x / 100.0) * v_w)
-            fc_py = int((fc_y / 100.0) * v_h)
-            fc_pw = int((fc_w / 100.0) * v_w)
-            fc_ph = int((fc_h / 100.0) * v_h)
+            # Calculate pixel bounds
+            fc_px = int((st.session_state["fc_x"] / 100.0) * v_w)
+            fc_py = int((st.session_state["fc_y"] / 100.0) * v_h)
+            fc_pw = int((st.session_state["fc_w"] / 100.0) * v_w)
+            fc_ph = int((st.session_state["fc_h"] / 100.0) * v_h)
 
-            gp_px = int((gp_x / 100.0) * v_w)
-            gp_py = int((gp_y / 100.0) * v_h)
-            gp_pw = int((gp_w / 100.0) * v_w)
-            gp_ph = int((gp_h / 100.0) * v_h)
+            gp_px = int((st.session_state["gp_x"] / 100.0) * v_w)
+            gp_py = int((st.session_state["gp_y"] / 100.0) * v_h)
+            gp_pw = int((st.session_state["gp_w"] / 100.0) * v_w)
+            gp_ph = int((st.session_state["gp_h"] / 100.0) * v_h)
 
             g_cfg = {
                 "facecam": {"x": fc_px, "y": fc_py, "w": fc_pw, "h": fc_ph},
@@ -886,22 +1069,108 @@ elif st.session_state["current_nav"] == "Layout":
             }
             st.session_state["active_gaming_config"] = g_cfg
 
-            # Dual Visual Feedback
-            st.markdown('<div style="font-size: 13px; font-weight: 700; color: #cbd5e1; margin: 14px 0 8px 0;">🔴 Live Dual Visual Alignment Feedback</div>', unsafe_allow_html=True)
-            v1, v2 = st.columns([3, 2])
-            with v1:
-                if st.session_state["preview_frame"] and os.path.exists(st.session_state["preview_frame"]):
-                    img_map = Image.open(st.session_state["preview_frame"]).convert("RGB")
-                    d = ImageDraw.Draw(img_map)
-                    d.rectangle([gp_px, gp_py, gp_px + gp_pw, gp_py + gp_ph], outline=(0, 210, 255), width=6)
-                    d.text((gp_px + 15, gp_py + 15), "TARGET GAMEPLAY (Bottom 60%)", fill=(0, 210, 255))
-                    d.rectangle([fc_px, fc_py, fc_px + fc_pw, fc_py + fc_ph], outline=(0, 255, 120), width=6)
-                    d.text((fc_px + 15, fc_py + 15), "FACECAM (Top 40%)", fill=(0, 255, 120))
-                    st.image(img_map, caption="1. Selection Bounding Boxes on 16:9 Raw Video", use_container_width=True)
-            with v2:
+            # -------------------------------------------------
+            # 3. INTERACTIVE MOUSE CANVAS & LIVE 9:16 SIMULATION
+            # -------------------------------------------------
+            st.markdown('<div style="font-size: 13px; font-weight: 700; color: #cbd5e1; margin: 16px 0 8px 0;">🔴 Live Visual Alignment Canvas & 9:16 Mockup</div>', unsafe_allow_html=True)
+            vis_c1, vis_c2 = st.columns([14, 8])
+
+            with vis_c1:
+                b64_frame = get_base64_encoded_image(st.session_state["preview_frame"])
+                if b64_frame:
+                    fc_l_px = int(st.session_state["fc_x"] * 640 / 100)
+                    fc_t_px = int(st.session_state["fc_y"] * 360 / 100)
+                    fc_w_px = int(st.session_state["fc_w"] * 640 / 100)
+                    fc_h_px = int(st.session_state["fc_h"] * 360 / 100)
+
+                    gp_l_px = int(st.session_state["gp_x"] * 640 / 100)
+                    gp_t_px = int(st.session_state["gp_y"] * 360 / 100)
+                    gp_w_px = int(st.session_state["gp_w"] * 640 / 100)
+                    gp_h_px = int(st.session_state["gp_h"] * 360 / 100)
+
+                    html_canvas = f"""
+                    <div style="font-family: sans-serif; user-select: none;">
+                        <div id="c-wrap" style="position: relative; width: 640px; height: 360px; background: #000; border-radius: 8px; overflow: hidden; border: 2px solid #283147; box-shadow: 0 4px 16px rgba(0,0,0,0.5);">
+                            <img src="data:image/jpeg;base64,{b64_frame}" style="width: 100%; height: 100%; object-fit: contain; pointer-events: none;" />
+                            
+                            <!-- Facecam Box (Green) -->
+                            <div id="fc-box" style="position: absolute; border: 3px solid #00ff78; background: rgba(0, 255, 120, 0.22); cursor: move; box-sizing: border-box; left: {fc_l_px}px; top: {fc_t_px}px; width: {fc_w_px}px; height: {fc_h_px}px;">
+                                <div style="position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,0.85); color: #00ff78; font-size: 10px; font-weight: 800; padding: 2px 5px; border-radius: 3px; pointer-events: none;">
+                                    📷 FACECAM (Top 40%)
+                                </div>
+                                <div id="fc-h" style="position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px; background: #00ff78; cursor: nwse-resize; border-radius: 2px;"></div>
+                            </div>
+
+                            <!-- Gameplay Box (Cyan) -->
+                            <div id="gp-box" style="position: absolute; border: 3px solid #00d2ff; background: rgba(0, 210, 255, 0.16); cursor: move; box-sizing: border-box; left: {gp_l_px}px; top: {gp_t_px}px; width: {gp_w_px}px; height: {gp_h_px}px;">
+                                <div style="position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,0.85); color: #00d2ff; font-size: 10px; font-weight: 800; padding: 2px 5px; border-radius: 3px; pointer-events: none;">
+                                    🎯 GAMEPLAY (Bottom 60%)
+                                </div>
+                                <div id="gp-h" style="position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px; background: #00d2ff; cursor: nwse-resize; border-radius: 2px;"></div>
+                            </div>
+                        </div>
+                        <div style="font-size: 11px; color: #94a3b8; margin-top: 6px;">
+                            💡 <b>Mouse Drag Enabled:</b> Click inside any box to move it freely; drag the corner handle to resize!
+                        </div>
+                    </div>
+
+                    <script>
+                    function attachDrag(boxId, handleId) {{
+                        const box = document.getElementById(boxId);
+                        const handle = document.getElementById(handleId);
+                        const wrap = document.getElementById('c-wrap');
+                        let isDragging = false, isResizing = false;
+                        let startX, startY, startL, startT, startW, startH;
+
+                        box.addEventListener('mousedown', function(e) {{
+                            if (e.target === handle) return;
+                            isDragging = true;
+                            startX = e.clientX; startY = e.clientY;
+                            startL = box.offsetLeft; startT = box.offsetTop;
+                            e.preventDefault();
+                        }});
+
+                        handle.addEventListener('mousedown', function(e) {{
+                            isResizing = true;
+                            startX = e.clientX; startY = e.clientY;
+                            startW = box.offsetWidth; startH = box.offsetHeight;
+                            e.stopPropagation();
+                            e.preventDefault();
+                        }});
+
+                        window.addEventListener('mousemove', function(e) {{
+                            if (isDragging) {{
+                                const dx = e.clientX - startX;
+                                const dy = e.clientY - startY;
+                                let nl = Math.max(0, Math.min(wrap.offsetWidth - box.offsetWidth, startL + dx));
+                                let nt = Math.max(0, Math.min(wrap.offsetHeight - box.offsetHeight, startT + dy));
+                                box.style.left = nl + 'px';
+                                box.style.top = nt + 'px';
+                            }} else if (isResizing) {{
+                                const dx = e.clientX - startX;
+                                const dy = e.clientY - startY;
+                                let nw = Math.max(40, Math.min(wrap.offsetWidth - box.offsetLeft, startW + dx));
+                                let nh = Math.max(40, Math.min(wrap.offsetHeight - box.offsetTop, startH + dy));
+                                box.style.width = nw + 'px';
+                                box.style.height = nh + 'px';
+                            }}
+                        }});
+
+                        window.addEventListener('mouseup', function() {{
+                            isDragging = false;
+                            isResizing = false;
+                        }});
+                    }}
+                    attachDrag('fc-box', 'fc-h');
+                    attachDrag('gp-box', 'gp-h');
+                    </script>
+                    """
+                    components.html(html_canvas, height=395)
+
+            with vis_c2:
                 mob_img = generate_mobile_preview(st.session_state["preview_frame"], g_cfg)
                 if mob_img:
-                    st.image(mob_img, caption="2. Exact 9:16 Short Preview Before Render", width=220)
+                    st.image(mob_img, caption="Live 9:16 Mobile Mockup", width=220)
 
         elif "Single Screen" in mode_sel:
             st.session_state["active_layout"] = "crop"
@@ -932,19 +1201,20 @@ elif st.session_state["current_nav"] == "Layout":
                         st.image(img_s, caption="Live 9:16 Horizontal Position Map", use_container_width=True)
                 else:
                     st.session_state["active_single_config"] = {"mode": "auto_face"}
-                    st.info("AI Face-Tracker will automatically track and center on the active speaker.")
+                    st.info("AI Face-Tracker will automatically center the camera on whoever is talking.")
 
         else:
             st.session_state["active_layout"] = "blur_fit"
             st.info("Full 16:9 widescreen video stays crisp in center with ambient blurred background.")
 
-        if st.button("✓ Save Layout & Return to Studio", type="primary"):
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("✓ Save Layout & Return to Studio", type="primary", use_container_width=True):
             st.session_state["current_nav"] = "Studio"
             st.rerun()
 
 
 # =============================================================
-# SCREEN 2.8: CAPTIONS & STYLING (BLUEPRINT 2.8)
+# SCREEN 2.8: CAPTIONS & STYLING
 # =============================================================
 elif st.session_state["current_nav"] == "Captions":
     st.markdown('<div class="top-header"><h2 class="top-title">🎨 Caption Engine & Effects</h2><div class="badge-gpu">ASS Karaoke</div></div>', unsafe_allow_html=True)
@@ -966,7 +1236,6 @@ elif st.session_state["current_nav"] == "Captions":
             index=["Hormozi Gold (Viral)", "MrBeast Hype", "Neon Cyberpunk", "Emerald Mint", "Clean Minimalist"].index(st.session_state["subtitle_theme"])
         )
         st.session_state["subtitle_theme"] = selected_theme
-
         st.session_state["enable_emojis"] = st.checkbox("✨ Auto-Emojis (💰 🔥 🏆 🎯 🚀 🐶)", value=st.session_state["enable_emojis"])
 
     with c_col2:
@@ -995,7 +1264,7 @@ elif st.session_state["current_nav"] == "Captions":
 
 
 # =============================================================
-# SCREEN 2.3 & 2.11: CLIPS LIBRARY & EXPORT HUB (BLUEPRINT 2.3)
+# SCREEN 2.3 & 2.11: CLIPS LIBRARY & EXPORT HUB
 # =============================================================
 elif st.session_state["current_nav"] == "Library":
     st.markdown('<div class="top-header"><h2 class="top-title">📂 Exported Shorts & Clips Library</h2><div class="badge-gpu">Completed</div></div>', unsafe_allow_html=True)
@@ -1056,7 +1325,7 @@ elif st.session_state["current_nav"] == "Library":
 
 
 # =============================================================
-# SCREEN 3.1 & 3.6: SETTINGS, HARDWARE & SHORTCUTS (BLUEPRINT 3.1)
+# SCREEN 3.1 & 3.6: SETTINGS, HARDWARE & SHORTCUTS
 # =============================================================
 elif st.session_state["current_nav"] == "Settings":
     st.markdown('<div class="top-header"><h2 class="top-title">⚙️ System Settings & Hardware</h2></div>', unsafe_allow_html=True)
@@ -1077,7 +1346,7 @@ elif st.session_state["current_nav"] == "Settings":
 
         st.markdown("""
         <div class="powder-card">
-            <h4 style="margin: 0 0 10px 0; color: #38bdf8;">⌨️ Keyboard Shortcuts (Blueprint 3.6)</h4>
+            <h4 style="margin: 0 0 10px 0; color: #38bdf8;">⌨️ Keyboard Shortcuts</h4>
             <div style="font-size: 13px; color: #cbd5e1; line-height: 1.8;">
                 • <b>Space:</b> Play / Pause Video<br>
                 • <b>F:</b> Toggle Fullscreen Player<br>
