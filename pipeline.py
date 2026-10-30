@@ -1,6 +1,21 @@
 import os
+import sys
 import time
 import logging
+
+# Ensure UTF-8 output on Windows for multilingual/Hindi console logging
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from core.audio import extract_audio, get_video_info, download_youtube_video
 from core.transcriber import AudioTranscriber
 from core.highlight_detector import HighlightDetector
@@ -11,13 +26,15 @@ from core.video_renderer import VideoRenderer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+DEFAULT_STORAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage")
+
 class ShortsPipeline:
-    def __init__(self, base_dir="storage", whisper_model="small", ollama_model="llama3.2:latest"):
-        self.base_dir = base_dir
-        self.uploads_dir = os.path.join(base_dir, "uploads")
-        self.audio_dir = os.path.join(base_dir, "audio")
-        self.cache_dir = os.path.join(base_dir, "cache")
-        self.outputs_dir = os.path.join(base_dir, "outputs")
+    def __init__(self, base_dir=None, whisper_model="small", ollama_model="llama3.2:latest"):
+        self.base_dir = base_dir or DEFAULT_STORAGE_DIR
+        self.uploads_dir = os.path.join(self.base_dir, "uploads")
+        self.audio_dir = os.path.join(self.base_dir, "audio")
+        self.cache_dir = os.path.join(self.base_dir, "cache")
+        self.outputs_dir = os.path.join(self.base_dir, "outputs")
 
         for d in [self.uploads_dir, self.audio_dir, self.cache_dir, self.outputs_dir]:
             os.makedirs(d, exist_ok=True)

@@ -16,7 +16,7 @@ def format_ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
 
 class SubtitleEngine:
-    def __init__(self, font_name="Arial", font_size=20, primary_color="&H00FFFFFF", highlight_color="&H0000FFFF"):
+    def __init__(self, font_name="Nirmala UI", font_size=20, primary_color="&H00FFFFFF", highlight_color="&H0000FFFF"):
         """
         Colors are in ASS &HAABBGGRR format:
         &H00FFFFFF = Solid White

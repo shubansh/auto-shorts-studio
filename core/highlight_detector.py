@@ -17,19 +17,19 @@ Key Criteria for a Viral Short:
 
 Output MUST be a JSON array of objects with this EXACT structure:
 [
-  {
+  {{
     "start": float,
     "end": float,
     "title": "Catchy 3-5 Word Title",
-    "hook_score": float (1.0 to 10.0),
+    "hook_score": 9.5,
     "reason": "Why this moment will perform well as a Short"
-  }
+  }}
 ]
 Return ONLY the raw JSON array, with no markdown formatting, no backticks, and no introductory text.
 """
 
 def clean_json_response(raw_text: str) -> str:
-    """Extracts JSON array string from potentially markdown-wrapped text."""
+    """Extracts and sanitizes JSON array string from potentially markdown-wrapped text."""
     text = raw_text.strip()
     if text.startswith("```json"):
         text = text[7:]
@@ -39,11 +39,15 @@ def clean_json_response(raw_text: str) -> str:
         text = text[:-3]
     text = text.strip()
     
-    # In case there's extra text before/after brackets
     start_bracket = text.find("[")
     end_bracket = text.rfind("]")
     if start_bracket != -1 and end_bracket != -1 and end_bracket > start_bracket:
-        return text[start_bracket:end_bracket + 1]
+        text = text[start_bracket:end_bracket + 1]
+    
+    # Remove single line comments // ...
+    text = re.sub(r'//.*', '', text)
+    # Remove trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
     return text
 
 class HighlightDetector:
@@ -93,12 +97,11 @@ Transcript with Timestamps:
 
 Identify the top {num_clips} viral moments and return the JSON array:"""
 
-        system_prompt = HIGHLIGHT_SYSTEM_PROMPT.format(
-            min_duration=min_duration,
-            max_duration=max_duration
-        )
-
         try:
+            system_prompt = HIGHLIGHT_SYSTEM_PROMPT.format(
+                min_duration=min_duration,
+                max_duration=max_duration
+            )
             logger.info(f"Querying Ollama ({self.model_name}) for highlights...")
             response = ollama.chat(
                 model=self.model_name,
