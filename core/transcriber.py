@@ -1,11 +1,31 @@
 import logging
 import json
 import os
+import sys
 import wave
 import io
 import numpy as np
 import torch
 import ctranslate2
+
+# Discover and load NVIDIA CUDA / cuBLAS / cuDNN DLLs on Windows
+def _setup_cuda_dlls():
+    site_pkgs = [p for p in sys.path if "site-packages" in p]
+    for sp in site_pkgs:
+        nvidia_dir = os.path.join(sp, "nvidia")
+        if os.path.exists(nvidia_dir):
+            for root, dirs, files in os.walk(nvidia_dir):
+                if any(f.endswith(".dll") for f in files):
+                    if hasattr(os, "add_dll_directory"):
+                        try:
+                            os.add_dll_directory(root)
+                        except Exception:
+                            pass
+                    if root not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = root + os.pathsep + os.environ.get("PATH", "")
+
+_setup_cuda_dlls()
+
 from faster_whisper import WhisperModel
 import faster_whisper.audio
 import faster_whisper.transcribe
@@ -74,8 +94,17 @@ class AudioTranscriber:
             self.compute_type = compute_type or ("float16" if device == "cuda" else "int8")
 
         self.model_size = model_size
-        logger.info(f"Initializing WhisperModel({model_size}) on {self.device} ({self.compute_type})")
-        self.model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
+        try:
+            logger.info(f"Initializing WhisperModel({model_size}) on {self.device} ({self.compute_type})")
+            self.model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
+        except Exception as e:
+            if self.device == "cuda":
+                logger.warning(f"CUDA initialization failed ({e}), falling back to CPU (int8)...")
+                self.device = "cpu"
+                self.compute_type = "int8"
+                self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
+            else:
+                raise e
 
     def transcribe(self, audio_path: str, language=None) -> dict:
         """
@@ -90,13 +119,32 @@ class AudioTranscriber:
         else:
             audio_input = audio_path
 
-        segments_generator, info = self.model.transcribe(
-            audio_input,
-            language=language,
-            word_timestamps=True,
-            vad_filter=True, # Skip silences
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
+        try:
+            segments_generator, info = self.model.transcribe(
+                audio_input,
+                language=language,
+                word_timestamps=True,
+                vad_filter=True, # Skip silences
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
+            # Try to fetch first segment to trigger any CUDA kernel errors early
+            segments_list = list(segments_generator)
+        except Exception as e:
+            if self.device == "cuda":
+                logger.warning(f"CUDA runtime error during transcription: {e}. Falling back to CPU...")
+                self.device = "cpu"
+                self.compute_type = "int8"
+                self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
+                segments_generator, info = self.model.transcribe(
+                    audio_input,
+                    language=language,
+                    word_timestamps=True,
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500)
+                )
+                segments_list = list(segments_generator)
+            else:
+                raise e
 
         detected_lang = info.language
         lang_prob = info.language_probability
@@ -105,7 +153,7 @@ class AudioTranscriber:
         segments_data = []
         full_text_list = []
 
-        for seg in segments_generator:
+        for seg in segments_list:
             words_data = []
             if seg.words:
                 for w in seg.words:
