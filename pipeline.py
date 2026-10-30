@@ -59,6 +59,7 @@ class ShortsPipeline:
         enable_emojis=True,
         layout_mode="crop",
         gaming_config=None,
+        single_crop_config=None,
         progress_callback=None
     ) -> list:
         """
@@ -144,18 +145,36 @@ class ShortsPipeline:
                     "top_height": 760
                 }
             elif layout_mode == "crop":
-                update_progress(
-                    f"Face Tracking Clip {clip_idx}/{total_clips}",
-                    pct_base,
-                    f"Analyzing speaker face position for '{clip_title}'..."
-                )
-                crop_info = self.face_tracker.calculate_crop_window(
-                    video_path,
-                    clip_start,
-                    clip_end,
-                    video_info["width"],
-                    video_info["height"]
-                )
+                if single_crop_config and single_crop_config.get("mode") == "custom":
+                    crop_w = int(video_info["height"] * 9 / 16)
+                    if crop_w % 2 != 0: crop_w += 1
+                    crop_x = int(single_crop_config.get("crop_x", (video_info["width"] - crop_w) // 2))
+                    crop_x = max(0, min(video_info["width"] - crop_w, crop_x))
+                    if crop_x % 2 != 0: crop_x += 1
+                    update_progress(
+                        f"Applying Custom 9:16 Crop {clip_idx}/{total_clips}",
+                        pct_base,
+                        f"Cropping at X={crop_x} for '{clip_title}'..."
+                    )
+                    crop_info = {
+                        "crop_w": crop_w,
+                        "crop_h": video_info["height"],
+                        "crop_x": crop_x,
+                        "crop_y": 0
+                    }
+                else:
+                    update_progress(
+                        f"Face Tracking Clip {clip_idx}/{total_clips}",
+                        pct_base,
+                        f"Analyzing speaker face position for '{clip_title}'..."
+                    )
+                    crop_info = self.face_tracker.calculate_crop_window(
+                        video_path,
+                        clip_start,
+                        clip_end,
+                        video_info["width"],
+                        video_info["height"]
+                    )
             else:
                 update_progress(
                     f"Preparing Layout {clip_idx}/{total_clips}",
