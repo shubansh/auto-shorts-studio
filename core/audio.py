@@ -67,23 +67,18 @@ def get_video_info(video_path: str) -> dict:
 
 def download_youtube_video(url: str, output_dir: str) -> str:
     """
-    Downloads YouTube video at best quality up to 1080p using yt-dlp.
-    Configured with android client to prevent YouTube 403 Forbidden throttling.
+    Downloads YouTube video at best high-definition quality (1080p / 720p).
+    Merges best video stream and best audio stream into crystal-clear MP4.
     """
     os.makedirs(output_dir, exist_ok=True)
     out_tmpl = os.path.join(output_dir, "%(id)s.%(ext)s")
     
     ydl_opts = {
-        'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]/best',
+        'format': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
         'outtmpl': out_tmpl,
         'merge_output_format': 'mp4',
         'quiet': True,
         'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
-        }
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

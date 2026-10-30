@@ -32,17 +32,17 @@ class VideoRenderer:
         ass_dir = os.path.dirname(os.path.abspath(ass_subtitle_path))
         ass_filename = os.path.basename(ass_subtitle_path)
 
-        # Video Filter Graph
+        # Video Filter Graph with high-quality Lanczos scaling for razor sharp vertical output
         filter_str = (
             f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},"
-            f"scale={self.target_width}:{self.target_height},"
+            f"scale={self.target_width}:{self.target_height}:flags=lanczos,"
             f"ass=filename={ass_filename}"
         )
 
         abs_video_path = os.path.abspath(video_path)
         abs_output_path = os.path.abspath(output_path)
 
-        # 1. Attempt GPU Acceleration with h264_nvenc
+        # 1. Attempt GPU Acceleration with h264_nvenc (High-Quality Studio Profile)
         cmd_gpu = [
             "ffmpeg", "-y",
             "-ss", f"{clip_start:.3f}",
@@ -50,14 +50,20 @@ class VideoRenderer:
             "-i", abs_video_path,
             "-vf", filter_str,
             "-c:v", "h264_nvenc",
-            "-preset", "p4",
-            "-b:v", "5M",
+            "-preset", "p6",
+            "-tune", "hq",
+            "-rc", "vbr",
+            "-cq", "19",
+            "-b:v", "14M",
+            "-maxrate", "18M",
+            "-bufsize", "28M",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", "256k",
             abs_output_path
         ]
 
-        logger.info(f"Rendering short with GPU (NVENC): {' '.join(cmd_gpu)}")
+        logger.info(f"Rendering high-quality short with GPU (NVENC): {' '.join(cmd_gpu)}")
         res = subprocess.run(cmd_gpu, cwd=ass_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if res.returncode == 0 and os.path.exists(abs_output_path) and os.path.getsize(abs_output_path) > 0:
@@ -66,7 +72,7 @@ class VideoRenderer:
 
         logger.warning(f"GPU render failed or NVENC unavailable. Stderr: {res.stderr}\nFalling back to CPU (libx264)...")
 
-        # 2. CPU Fallback with libx264
+        # 2. CPU Fallback with libx264 (CRF 18 visually lossless)
         cmd_cpu = [
             "ffmpeg", "-y",
             "-ss", f"{clip_start:.3f}",
@@ -74,10 +80,11 @@ class VideoRenderer:
             "-i", abs_video_path,
             "-vf", filter_str,
             "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "22",
+            "-preset", "medium",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", "256k",
             abs_output_path
         ]
 
