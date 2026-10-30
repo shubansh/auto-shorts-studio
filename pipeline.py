@@ -61,6 +61,8 @@ class ShortsPipeline:
         gaming_config=None,
         single_crop_config=None,
         preselected_clips=None,
+        scan_start=0.0,
+        scan_end=None,
         progress_callback=None
     ) -> list:
         """
@@ -116,7 +118,9 @@ class ShortsPipeline:
                 transcript_data,
                 num_clips=num_clips,
                 min_duration=min_duration,
-                max_duration=max_duration
+                max_duration=max_duration,
+                scan_start=scan_start,
+                scan_end=scan_end
             )
 
         if not clips:

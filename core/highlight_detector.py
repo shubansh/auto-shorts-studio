@@ -54,15 +54,25 @@ class HighlightDetector:
     def __init__(self, model_name="llama3.2:latest"):
         self.model_name = model_name
 
-    def find_highlights(self, transcript_data: dict, num_clips=3, min_duration=25, max_duration=60) -> list:
+    def find_highlights(self, transcript_data: dict, num_clips=3, min_duration=25, max_duration=60, scan_start=0.0, scan_end=None) -> list:
         """
         Calls Ollama to detect top viral moments.
         Returns a list of highlight dictionaries with verified start and end times.
+        Supports scanning a restricted sub-range (e.g. ignoring intro).
         """
         segments = transcript_data.get("segments", [])
         if not segments:
             logger.warning("No segments found in transcript.")
             return []
+
+        # Filter to active scan window if specified
+        if scan_start > 0 or (scan_end is not None and scan_end > 0):
+            filtered = [
+                s for s in segments
+                if s["end"] >= scan_start and (scan_end is None or s["start"] <= scan_end)
+            ]
+            if filtered:
+                segments = filtered
 
         total_duration = segments[-1]["end"]
         

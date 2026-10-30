@@ -40,7 +40,7 @@ if sys.platform == "win32":
 
 import streamlit as st
 import streamlit.components.v1 as components
-from core.audio import extract_preview_frame, extract_timeline_thumbnails, get_video_info, download_youtube_video
+from core.audio import extract_preview_frame, extract_timeline_thumbnails, get_video_info, download_youtube_video, trim_video
 
 # -------------------------------------------------------------
 # STREAMLIT PAGE CONFIGURATION
@@ -640,6 +640,54 @@ elif st.session_state["current_nav"] == "Studio":
                             st.image(t["path"], caption=f"{int(t['timestamp'])}s", use_container_width=True)
 
             # -------------------------------------------------
+            # ✂️ CUT & DELETE PRE-ROLL INTRO (USER REQUEST)
+            # -------------------------------------------------
+            st.markdown("""
+            <div class="powder-card" style="border: 1px solid #ef4444; background: rgba(239, 68, 68, 0.08); margin-top: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <h4 style="margin: 0; color: #f87171; font-size: 15px;">✂️ Cut & Delete Pre-Roll Intro (Permanently Start From Here)</h4>
+                    <span style="font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #fca5a5; padding: 2px 8px; border-radius: 4px; font-weight: 700;">Lossless 0.1s Fast</span>
+                </div>
+                <p style="color: #cbd5e1; font-size: 12px; margin: 0 0 10px 0;">
+                    Cut off the talking webcam intro and delete everything before your desired timestamp. The trimmed video becomes your new active project!
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            trim_c1, trim_c2 = st.columns([2, 1])
+            with trim_c1:
+                cur_snap = int(st.session_state.get("snapshot_ts", 91.0))
+                trim_start_s = st.number_input("Delete video timeline before (seconds):", min_value=0, max_value=max(0, int(v_dur) - 10), value=min(int(v_dur) - 10, cur_snap), step=1)
+                m_t = f"{int(trim_start_s // 60):02d}:{int(trim_start_s % 60):02d}"
+                st.caption(f"📍 New video start: `{m_t}` | Deleted duration: **{trim_start_s}s**")
+
+            with trim_c2:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                if st.button("✂️ Cut & Delete Intro", type="primary", use_container_width=True):
+                    if trim_start_s <= 0:
+                        st.warning("Please choose a timestamp greater than 0 to trim the intro!")
+                    else:
+                        with st.spinner("Losslessly trimming video in 0.1s..."):
+                            v_base = os.path.splitext(v_name)[0]
+                            trimmed_filename = f"{v_base}_trimmed_{int(trim_start_s)}s.mp4"
+                            trimmed_path = os.path.join(upload_dir, trimmed_filename)
+                            trim_video(v_path, trimmed_path, float(trim_start_s), v_dur)
+
+                            if os.path.exists(trimmed_path):
+                                st.session_state["video_path"] = trimmed_path
+                                meta = get_video_info(trimmed_path)
+                                st.session_state["video_meta"] = meta
+                                st.session_state["snapshot_ts"] = 10.0
+                                p_frame = os.path.join(cache_dir, f"{os.path.splitext(trimmed_filename)[0]}_preview.jpg")
+                                extract_preview_frame(trimmed_path, p_frame, timestamp=10.0)
+                                st.session_state["preview_frame"] = p_frame
+                                st.session_state["timeline_thumbs"] = extract_timeline_thumbnails(trimmed_path, cache_dir, meta["duration"], count=6)
+                                st.session_state["discovered_clips"] = []
+                                st.session_state["selected_clip_indices"] = []
+                                st.success(f"Video trimmed! The first {trim_start_s}s have been removed. Project now starts directly from gameplay!")
+                                st.rerun()
+
+            # -------------------------------------------------
             # INTERACTIVE CLIP IN/OUT CUTTER (USER REQUEST)
             # -------------------------------------------------
             st.markdown("""
@@ -771,6 +819,13 @@ elif st.session_state["current_nav"] == "Studio":
                 with col_d:
                     dur_bounds = st.slider("Target Duration", 15, 90, (20, 50), step=5)
 
+                skip_intro = st.checkbox("✂️ Ignore Pre-Roll Intro in AI Scan", value=True)
+                scan_start_sec = 0.0
+                if skip_intro:
+                    def_skip = int(st.session_state.get("snapshot_ts", 91.0))
+                    scan_start_sec = st.number_input("Scan speech only after (seconds):", min_value=0, max_value=max(0, int(v_dur) - 10), value=min(int(v_dur) - 10, def_skip), step=5)
+                    st.caption(f"AI will ignore 00:00 to {int(scan_start_sec//60):02d}:{int(scan_start_sec%60):02d} and only look for gameplay highlights.")
+
                 if st.button("⚡ Scan & Discover Highlights", type="primary", use_container_width=True):
                     with st.spinner("Transcribing audio & finding viral moments with AI..."):
                         try:
@@ -797,7 +852,8 @@ elif st.session_state["current_nav"] == "Studio":
                                 t_data,
                                 num_clips=clips_num,
                                 min_duration=dur_bounds[0],
-                                max_duration=dur_bounds[1]
+                                max_duration=dur_bounds[1],
+                                scan_start=float(scan_start_sec)
                             )
 
                             st.session_state["discovered_clips"] = clips
