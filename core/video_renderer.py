@@ -16,39 +16,54 @@ class VideoRenderer:
         clip_end: float,
         crop_info: dict,
         ass_subtitle_path: str,
-        output_path: str
+        output_path: str,
+        layout_mode: str = "crop"
     ) -> str:
         """
-        Cuts clip, crops to 9:16 portrait, scales to 1080x1920, and burns karaoke subtitles.
-        Uses NVENC GPU acceleration with automatic CPU fallback.
+        Renders a 9:16 Short (1080x1920) with subtitle burn-in.
+        layout_mode options:
+          - 'crop': Smart face-centered vertical crop
+          - 'blur_fit': Original 16:9 in center with blurred 9:16 dynamic background
         """
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-
-        crop_w = crop_info.get("crop_w", 608)
-        crop_h = crop_info.get("crop_h", 1080)
-        crop_x = crop_info.get("crop_x", 0)
-        crop_y = crop_info.get("crop_y", 0)
 
         ass_dir = os.path.dirname(os.path.abspath(ass_subtitle_path))
         ass_filename = os.path.basename(ass_subtitle_path)
 
-        # Video Filter Graph with high-quality Lanczos scaling for razor sharp vertical output
-        filter_str = (
-            f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},"
-            f"scale={self.target_width}:{self.target_height}:flags=lanczos,"
-            f"ass=filename={ass_filename}"
-        )
-
         abs_video_path = os.path.abspath(video_path)
         abs_output_path = os.path.abspath(output_path)
 
-        # 1. Attempt GPU Acceleration with h264_nvenc (High-Quality Studio Profile)
+        # Build filter based on layout mode
+        if layout_mode == "blur_fit":
+            filter_args = [
+                "-filter_complex",
+                f"[0:v]scale={self.target_width}:{self.target_height}:force_original_aspect_ratio=increase,crop={self.target_width}:{self.target_height},boxblur=22:5[bg];"
+                f"[0:v]scale={self.target_width}:-2:flags=lanczos[fg];"
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2,ass=filename={ass_filename}[v]",
+                "-map", "[v]",
+                "-map", "0:a?"
+            ]
+        else:
+            # Smart crop mode
+            crop_w = crop_info.get("crop_w", 608)
+            crop_h = crop_info.get("crop_h", 1080)
+            crop_x = crop_info.get("crop_x", 0)
+            crop_y = crop_info.get("crop_y", 0)
+
+            filter_str = (
+                f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},"
+                f"scale={self.target_width}:{self.target_height}:flags=lanczos,"
+                f"ass=filename={ass_filename}"
+            )
+            filter_args = ["-vf", filter_str]
+
+        # 1. Attempt GPU Acceleration with h264_nvenc
         cmd_gpu = [
             "ffmpeg", "-y",
             "-ss", f"{clip_start:.3f}",
             "-to", f"{clip_end:.3f}",
             "-i", abs_video_path,
-            "-vf", filter_str,
+            *filter_args,
             "-c:v", "h264_nvenc",
             "-preset", "p6",
             "-tune", "hq",
@@ -63,7 +78,7 @@ class VideoRenderer:
             abs_output_path
         ]
 
-        logger.info(f"Rendering high-quality short with GPU (NVENC): {' '.join(cmd_gpu)}")
+        logger.info(f"Rendering short with GPU NVENC (mode={layout_mode}): {' '.join(cmd_gpu)}")
         res = subprocess.run(cmd_gpu, cwd=ass_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if res.returncode == 0 and os.path.exists(abs_output_path) and os.path.getsize(abs_output_path) > 0:
@@ -72,13 +87,13 @@ class VideoRenderer:
 
         logger.warning(f"GPU render failed or NVENC unavailable. Stderr: {res.stderr}\nFalling back to CPU (libx264)...")
 
-        # 2. CPU Fallback with libx264 (CRF 18 visually lossless)
+        # 2. CPU Fallback with libx264
         cmd_cpu = [
             "ffmpeg", "-y",
             "-ss", f"{clip_start:.3f}",
             "-to", f"{clip_end:.3f}",
             "-i", abs_video_path,
-            "-vf", filter_str,
+            *filter_args,
             "-c:v", "libx264",
             "-preset", "medium",
             "-crf", "18",

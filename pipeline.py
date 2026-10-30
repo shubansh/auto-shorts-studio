@@ -55,7 +55,9 @@ class ShortsPipeline:
         num_clips=3,
         min_duration=20,
         max_duration=60,
-        highlight_color="&H0000FFFF",
+        subtitle_theme="Hormozi Gold (Viral)",
+        enable_emojis=True,
+        layout_mode="crop",
         progress_callback=None
     ) -> list:
         """
@@ -118,7 +120,7 @@ class ShortsPipeline:
         # Step 5: Process & Render Each Short
         output_results = []
         total_clips = len(clips)
-        self.subtitle_engine.highlight_color = highlight_color
+        self.subtitle_engine = SubtitleEngine(theme_name=subtitle_theme, enable_emojis=enable_emojis)
 
         for idx, clip in enumerate(clips):
             clip_idx = idx + 1
@@ -127,20 +129,27 @@ class ShortsPipeline:
             clip_title = clip["title"]
             pct_base = 60 + int((idx / total_clips) * 35)
 
-            update_progress(
-                f"Face Tracking Clip {clip_idx}/{total_clips}",
-                pct_base,
-                f"Analyzing speaker face position for '{clip_title}'..."
-            )
-
-            # Smart Crop Window
-            crop_info = self.face_tracker.calculate_crop_window(
-                video_path,
-                clip_start,
-                clip_end,
-                video_info["width"],
-                video_info["height"]
-            )
+            # Smart Crop Window (only needed if layout_mode == 'crop')
+            crop_info = {"crop_w": 608, "crop_h": 1080, "crop_x": 0, "crop_y": 0}
+            if layout_mode == "crop":
+                update_progress(
+                    f"Face Tracking Clip {clip_idx}/{total_clips}",
+                    pct_base,
+                    f"Analyzing speaker face position for '{clip_title}'..."
+                )
+                crop_info = self.face_tracker.calculate_crop_window(
+                    video_path,
+                    clip_start,
+                    clip_end,
+                    video_info["width"],
+                    video_info["height"]
+                )
+            else:
+                update_progress(
+                    f"Preparing Layout {clip_idx}/{total_clips}",
+                    pct_base,
+                    f"Applying '{layout_mode}' layout for '{clip_title}'..."
+                )
 
             # Generate ASS Subtitles
             update_progress(
@@ -162,7 +171,7 @@ class ShortsPipeline:
             update_progress(
                 f"Rendering Short {clip_idx}/{total_clips}",
                 pct_base + 6,
-                f"Exporting 9:16 Short with GPU NVENC..."
+                f"Exporting 9:16 Short ({layout_mode}) with GPU NVENC..."
             )
             short_filename = f"Short_{clip_idx}_{int(clip_start)}s_{int(clip_end)}s.mp4"
             short_output_path = os.path.join(self.outputs_dir, short_filename)
@@ -173,7 +182,8 @@ class ShortsPipeline:
                 clip_end,
                 crop_info,
                 ass_path,
-                short_output_path
+                short_output_path,
+                layout_mode=layout_mode
             )
 
             output_results.append({
@@ -185,6 +195,8 @@ class ShortsPipeline:
                 "end": clip_end,
                 "duration": round(clip_end - clip_start, 1),
                 "video_path": rendered_path,
+                "source_video_path": video_path,
+                "video_filename": video_filename,
                 "filename": short_filename
             })
 
