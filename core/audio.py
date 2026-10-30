@@ -41,6 +41,37 @@ def extract_preview_frame(video_path: str, output_jpg_path: str, timestamp: floa
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return output_jpg_path if os.path.exists(output_jpg_path) else ""
 
+def extract_timeline_thumbnails(video_path: str, output_dir: str, duration: float, count: int = 6) -> list:
+    """
+    Extracts evenly spaced thumbnails across the video to render a Powder.gg filmstrip timeline.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
+    thumbnails = []
+    
+    if duration <= 0:
+        duration = 60.0
+
+    step = duration / (count + 1)
+    for i in range(1, count + 1):
+        ts = round(step * i, 2)
+        out_thumb = os.path.join(output_dir, f"{base_name}_thumb_{i}.jpg")
+        if not os.path.exists(out_thumb):
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", f"{ts:.2f}",
+                "-i", video_path,
+                "-vframes", "1",
+                "-vf", "scale=160:-1",
+                "-q:v", "5",
+                out_thumb
+            ]
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(out_thumb):
+            thumbnails.append({"timestamp": ts, "path": out_thumb})
+            
+    return thumbnails
+
 def get_video_info(video_path: str) -> dict:
     """
     Retrieves video resolution, duration, and frame rate via ffprobe.

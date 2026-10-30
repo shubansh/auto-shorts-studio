@@ -151,16 +151,39 @@ Identify the top {num_clips} viral moments and return the JSON array:"""
                 elif dur > (max_dur * 1.2):
                     end = start + max_dur
 
+                h_score = float(c.get("hook_score", 8.5))
+                v_score = int(h_score * 10) if h_score <= 10.0 else int(h_score)
+                tags = self._extract_tags_for_range(segments, start, end)
+
                 valid.append({
                     "start": round(start, 2),
                     "end": round(end, 2),
                     "title": c.get("title", f"Clip at {int(start)}s"),
-                    "hook_score": float(c.get("hook_score", 8.0)),
+                    "hook_score": h_score,
+                    "virality_score": v_score,
+                    "tags": tags,
                     "reason": c.get("reason", "Detected engaging moment")
                 })
             except Exception as ex:
                 logger.warning(f"Skipping invalid clip candidate {c}: {ex}")
         return valid
+
+    def _extract_tags_for_range(self, segments, start, end):
+        text_in_range = " ".join([s.get("text", "") for s in segments if s.get("end", 0) >= start and s.get("start", 0) <= end]).lower()
+        tags = []
+        if any(k in text_in_range for k in ["kill", "headshot", "mara", "died", "dead", "shoot", "knock", "hit", "fire", "attack"]):
+            tags.append("💀 Kill")
+        if any(k in text_in_range for k in ["win", "won", "victory", "jeet", "booyah", "chicken", "champion", "op", "pro"]):
+            tags.append("👑 Victory")
+        if any(k in text_in_range for k in ["haha", "lmao", "lol", "hasna", "funny", "joke", "comedy"]):
+            tags.append("😂 Laughter")
+        if any(k in text_in_range for k in ["bhai", "aag", "omg", "what", "bro", "shout", "chillao", "loud", "wah", "dekho"]):
+            tags.append("🔊 Loudness")
+        if any(k in text_in_range for k in ["clutch", "1v4", "1v3", "save", "rush"]):
+            tags.append("⚡ Clutch")
+        if not tags:
+            tags = ["⚡ Clip it", "🔥 Highlight"]
+        return tags[:3]
 
     def _snap_to_segment(self, timestamp, segments, mode="start"):
         closest = timestamp
@@ -191,11 +214,15 @@ Identify the top {num_clips} viral moments and return the JSON array:"""
                 # Find title from first segment text
                 first_txt = segments[i].get("text", "Highlight Moment")
                 title = " ".join(first_txt.split()[:5])
+                v_score = 88 - (len(clips) * 6)
+                tags = self._extract_tags_for_range(segments, seg_start, target_end)
                 clips.append({
                     "start": round(seg_start, 2),
                     "end": round(target_end, 2),
                     "title": title or f"Highlight Clip {len(clips)+1}",
-                    "hook_score": 8.0,
+                    "hook_score": 8.5,
+                    "virality_score": v_score,
+                    "tags": tags,
                     "reason": "Automated speech density highlight selection."
                 })
         return clips

@@ -48,15 +48,29 @@ class VideoRenderer:
             facecam = crop_info.get("facecam", {"x": 1300, "y": 50, "w": 580, "h": 460})
             gameplay = crop_info.get("gameplay", {"x": 420, "y": 0, "w": 1080, "h": 1080})
             
-            fx = max(0, int(facecam.get("x", 1300)))
-            fy = max(0, int(facecam.get("y", 50)))
-            fw = max(100, int(facecam.get("w", 580)))
-            fh = max(100, int(facecam.get("h", 460)))
+            # Retrieve video dimensions to guarantee valid crop bounds
+            from core.audio import get_video_info
+            try:
+                v_meta = get_video_info(abs_video_path)
+                in_w, in_h = v_meta["width"], v_meta["height"]
+            except Exception:
+                in_w, in_h = 1920, 1080
 
-            gx = max(0, int(gameplay.get("x", 420)))
-            gy = max(0, int(gameplay.get("y", 0)))
-            gw = max(100, int(gameplay.get("w", 1080)))
-            gh = max(100, int(gameplay.get("h", 1080)))
+            fx = max(0, min(in_w - 50, int(facecam.get("x", 1300))))
+            fy = max(0, min(in_h - 50, int(facecam.get("y", 50))))
+            fw = max(50, min(in_w - fx, int(facecam.get("w", 580))))
+            fh = max(50, min(in_h - fy, int(facecam.get("h", 460))))
+
+            gx = max(0, min(in_w - 50, int(gameplay.get("x", 420))))
+            gy = max(0, min(in_h - 50, int(gameplay.get("y", 0))))
+            gw = max(50, min(in_w - gx, int(gameplay.get("w", 1080))))
+            gh = max(50, min(in_h - gy, int(gameplay.get("h", 1080))))
+
+            # Make dimensions even
+            if fw % 2 != 0: fw -= 1
+            if fh % 2 != 0: fh -= 1
+            if gw % 2 != 0: gw -= 1
+            if gh % 2 != 0: gh -= 1
 
             top_h = int(crop_info.get("top_height", 760))
             if top_h % 2 != 0: top_h += 1

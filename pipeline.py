@@ -60,6 +60,7 @@ class ShortsPipeline:
         layout_mode="crop",
         gaming_config=None,
         single_crop_config=None,
+        preselected_clips=None,
         progress_callback=None
     ) -> list:
         """
@@ -106,13 +107,17 @@ class ShortsPipeline:
             logger.info("Loaded transcript from cache.")
 
         # Step 4: Highlight Detection with Ollama
-        update_progress("AI Clip Discovery", 55, f"Finding top viral moments using Ollama ({self.ollama_model_name})...")
-        clips = self.highlight_detector.find_highlights(
-            transcript_data,
-            num_clips=num_clips,
-            min_duration=min_duration,
-            max_duration=max_duration
-        )
+        if preselected_clips and len(preselected_clips) > 0:
+            clips = preselected_clips
+            logger.info(f"Using {len(clips)} preselected clips from user interface.")
+        else:
+            update_progress("AI Clip Discovery", 55, f"Finding top viral moments using Ollama ({self.ollama_model_name})...")
+            clips = self.highlight_detector.find_highlights(
+                transcript_data,
+                num_clips=num_clips,
+                min_duration=min_duration,
+                max_duration=max_duration
+            )
 
         if not clips:
             raise RuntimeError("Could not find any highlight clips from the transcript.")
@@ -221,6 +226,8 @@ class ShortsPipeline:
                 "clip_number": clip_idx,
                 "title": clip_title,
                 "hook_score": clip.get("hook_score", 8.5),
+                "virality_score": clip.get("virality_score", int(clip.get("hook_score", 8.5) * 10)),
+                "tags": clip.get("tags", ["🔥 Highlight", "⚡ Clip it"]),
                 "reason": clip.get("reason", "Engaging viral moment"),
                 "start": clip_start,
                 "end": clip_end,
