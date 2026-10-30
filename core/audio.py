@@ -27,6 +27,20 @@ def extract_audio(video_path: str, output_wav_path: str) -> str:
         raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr}")
     return output_wav_path
 
+def extract_preview_frame(video_path: str, output_jpg_path: str, timestamp: float = 5.0) -> str:
+    """Extracts a single high-quality JPG preview frame from video for visual selection."""
+    os.makedirs(os.path.dirname(os.path.abspath(output_jpg_path)), exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", f"{timestamp:.2f}",
+        "-i", video_path,
+        "-vframes", "1",
+        "-q:v", "2",
+        output_jpg_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return output_jpg_path if os.path.exists(output_jpg_path) else ""
+
 def get_video_info(video_path: str) -> dict:
     """
     Retrieves video resolution, duration, and frame rate via ffprobe.

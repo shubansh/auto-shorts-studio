@@ -43,6 +43,34 @@ class VideoRenderer:
                 "-map", "[v]",
                 "-map", "0:a?"
             ]
+        elif layout_mode == "gaming_split":
+            # Powder.gg gaming layout: Facecam on top, Gameplay on bottom
+            facecam = crop_info.get("facecam", {"x": 1300, "y": 50, "w": 580, "h": 460})
+            gameplay = crop_info.get("gameplay", {"x": 420, "y": 0, "w": 1080, "h": 1080})
+            
+            fx = max(0, int(facecam.get("x", 1300)))
+            fy = max(0, int(facecam.get("y", 50)))
+            fw = max(100, int(facecam.get("w", 580)))
+            fh = max(100, int(facecam.get("h", 460)))
+
+            gx = max(0, int(gameplay.get("x", 420)))
+            gy = max(0, int(gameplay.get("y", 0)))
+            gw = max(100, int(gameplay.get("w", 1080)))
+            gh = max(100, int(gameplay.get("h", 1080)))
+
+            top_h = int(crop_info.get("top_height", 760))
+            if top_h % 2 != 0: top_h += 1
+            bot_h = self.target_height - top_h
+            if bot_h % 2 != 0: bot_h -= 1
+
+            filter_args = [
+                "-filter_complex",
+                f"[0:v]crop={fw}:{fh}:{fx}:{fy},scale={self.target_width}:{top_h}:flags=lanczos[cam];"
+                f"[0:v]crop={gw}:{gh}:{gx}:{gy},scale={self.target_width}:{bot_h}:flags=lanczos[game];"
+                f"[cam][game]vstack=inputs=2,ass=filename={ass_filename}[v]",
+                "-map", "[v]",
+                "-map", "0:a?"
+            ]
         else:
             # Smart crop mode
             crop_w = crop_info.get("crop_w", 608)

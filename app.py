@@ -15,6 +15,7 @@ if sys.platform == "win32":
             pass
 
 import streamlit as st
+from PIL import Image, ImageDraw
 
 st.set_page_config(
     page_title="AutoShorts Studio AI",
@@ -51,6 +52,14 @@ st.markdown("""
         font-size: 17px;
         color: #ffffff;
     }
+    .gaming-box {
+        background: #161a23;
+        border: 1px solid #3b82f6;
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 10px;
+        margin-bottom: 15px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,12 +73,17 @@ with st.sidebar:
 
     layout_mode_choice = st.selectbox(
         "📐 Video Layout Style",
-        ["Smart Face-Crop (Portrait 9:16)", "Cinematic Blur Background (Full Frame)"],
+        [
+            "Smart Face-Crop (Portrait 9:16)",
+            "🎮 Powder.gg Gaming Mode (Facecam + Gameplay Stack)",
+            "Cinematic Blur Background (Full Frame)"
+        ],
         index=0,
-        help="'Smart Face-Crop' tracks speaker faces. 'Cinematic Blur' shows full 16:9 frame with aesthetic blurred background."
+        help="'Smart Face-Crop' tracks speaker faces. 'Gaming Mode' stacks streamer facecam on top and gameplay on bottom. 'Cinematic Blur' keeps full 16:9 widescreen frame."
     )
     layout_map = {
         "Smart Face-Crop (Portrait 9:16)": "crop",
+        "🎮 Powder.gg Gaming Mode (Facecam + Gameplay Stack)": "gaming_split",
         "Cinematic Blur Background (Full Frame)": "blur_fit"
     }
 
@@ -139,6 +153,106 @@ with input_tab2:
         video_file_path = yt_url
         is_youtube = True
 
+# Powder.gg Gaming Layout Selector
+gaming_config = None
+if layout_map[layout_mode_choice] == "gaming_split":
+    st.markdown("""
+    <div class="gaming-box">
+        <h4 style="margin: 0; color: #60a5fa;">🎮 Powder.gg Gaming Split-Screen Configuration</h4>
+        <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">
+            Customize your <b>Facecam Box</b> (top of Short) and <b>Gameplay Box</b> (bottom of Short).
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    streamer_preset = st.selectbox(
+        "🎛️ Streamer Layout Preset",
+        [
+            "Center-Top Facecam (Like Spyki Plays)",
+            "Top-Right Facecam (Scout, Mortal, Dynamo style)",
+            "Top-Left Facecam",
+            "Bottom-Right Facecam",
+            "Bottom-Left Facecam",
+            "Custom Manual Selection"
+        ],
+        index=0
+    )
+
+    preset_defaults = {
+        "Center-Top Facecam (Like Spyki Plays)": {"fc_x": 28, "fc_y": 15, "fc_w": 44, "fc_h": 45, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
+        "Top-Right Facecam (Scout, Mortal, Dynamo style)": {"fc_x": 65, "fc_y": 5, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
+        "Top-Left Facecam": {"fc_x": 5, "fc_y": 5, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
+        "Bottom-Right Facecam": {"fc_x": 65, "fc_y": 55, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
+        "Bottom-Left Facecam": {"fc_x": 5, "fc_y": 55, "fc_w": 32, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100},
+        "Custom Manual Selection": {"fc_x": 30, "fc_y": 10, "fc_w": 40, "fc_h": 40, "gp_x": 15, "gp_y": 0, "gp_w": 70, "gp_h": 100}
+    }
+
+    cur_p = preset_defaults.get(streamer_preset, preset_defaults["Center-Top Facecam (Like Spyki Plays)"])
+
+    col_fc, col_gp = st.columns(2)
+    with col_fc:
+        st.markdown("**📷 1. Facecam Area (Top 40% of Short)**")
+        fc_x = st.slider("Facecam Horizontal X (%)", 0, 100, cur_p["fc_x"])
+        fc_y = st.slider("Facecam Vertical Y (%)", 0, 100, cur_p["fc_y"])
+        fc_w = st.slider("Facecam Width (%)", 15, 60, cur_p["fc_w"])
+        fc_h = st.slider("Facecam Height (%)", 15, 60, cur_p["fc_h"])
+
+    with col_gp:
+        st.markdown("**🎯 2. Main Gameplay Area (Bottom 60% of Short)**")
+        gp_x = st.slider("Gameplay Center X (%)", 0, 100, cur_p["gp_x"])
+        gp_y = st.slider("Gameplay Vertical Y (%)", 0, 100, cur_p["gp_y"])
+        gp_w = st.slider("Gameplay Width (%)", 40, 100, cur_p["gp_w"])
+        gp_h = st.slider("Gameplay Height (%)", 40, 100, cur_p["gp_h"])
+
+    # Visual Frame Preview with Live Bounding Boxes
+    v_w, v_h = 1920, 1080
+    fc_pixel_x = int((fc_x / 100.0) * v_w)
+    fc_pixel_y = int((fc_y / 100.0) * v_h)
+    fc_pixel_w = int((fc_w / 100.0) * v_w)
+    fc_pixel_h = int((fc_h / 100.0) * v_h)
+
+    gp_pixel_x = int((gp_x / 100.0) * v_w)
+    gp_pixel_y = int((gp_y / 100.0) * v_h)
+    gp_pixel_w = int((gp_w / 100.0) * v_w)
+    gp_pixel_h = int((gp_h / 100.0) * v_h)
+
+    # Ensure even coordinates for video codecs
+    if fc_pixel_x % 2 != 0: fc_pixel_x += 1
+    if fc_pixel_y % 2 != 0: fc_pixel_y += 1
+    if fc_pixel_w % 2 != 0: fc_pixel_w += 1
+    if fc_pixel_h % 2 != 0: fc_pixel_h += 1
+
+    if gp_pixel_x % 2 != 0: gp_pixel_x += 1
+    if gp_pixel_y % 2 != 0: gp_pixel_y += 1
+    if gp_pixel_w % 2 != 0: gp_pixel_w += 1
+    if gp_pixel_h % 2 != 0: gp_pixel_h += 1
+
+    gaming_config = {
+        "facecam": {"x": fc_pixel_x, "y": fc_pixel_y, "w": fc_pixel_w, "h": fc_pixel_h},
+        "gameplay": {"x": gp_pixel_x, "y": gp_pixel_y, "w": gp_pixel_w, "h": gp_pixel_h},
+        "top_height": 760
+    }
+
+    # Draw Live Visual Bounding Box Preview
+    preview_box_img = Image.new("RGB", (960, 540), color=(20, 24, 33))
+    draw = ImageDraw.Draw(preview_box_img)
+
+    # Scale coordinates to preview size (960x540 = 0.5x)
+    s_fc_x, s_fc_y = fc_pixel_x // 2, fc_pixel_y // 2
+    s_fc_w, s_fc_h = fc_pixel_w // 2, fc_pixel_h // 2
+    s_gp_x, s_gp_y = gp_pixel_x // 2, gp_pixel_y // 2
+    s_gp_w, s_gp_h = gp_pixel_w // 2, gp_pixel_h // 2
+
+    # Draw gameplay box (Cyan)
+    draw.rectangle([s_gp_x, s_gp_y, s_gp_x + s_gp_w, s_gp_y + s_gp_h], outline=(0, 210, 255), width=3)
+    draw.text((s_gp_x + 10, s_gp_y + 10), "🎯 GAMEPLAY AREA (Bottom 60%)", fill=(0, 210, 255))
+
+    # Draw facecam box (Neon Green)
+    draw.rectangle([s_fc_x, s_fc_y, s_fc_x + s_fc_w, s_fc_y + s_fc_h], outline=(0, 255, 120), width=3)
+    draw.text((s_fc_x + 10, s_fc_y + 10), "📷 FACECAM (Top 40%)", fill=(0, 255, 120))
+
+    st.image(preview_box_img, caption="Live Powder.gg Visual Split-Screen Alignment Map (16:9 Screen)", use_container_width=True)
+
 st.markdown("---")
 
 # Generate Action
@@ -170,12 +284,13 @@ if st.button("🚀 Generate Shorts Automatically", type="primary", use_container
                     subtitle_theme=theme_choice,
                     enable_emojis=enable_emojis,
                     layout_mode=layout_map.get(layout_mode_choice, "crop"),
+                    gaming_config=gaming_config,
                     progress_callback=on_progress
                 )
 
             st.session_state["results"] = results
             st.session_state["pipeline"] = pipeline
-            st.session_state["video_source"] = video_file_path
+            st.session_state["gaming_config"] = gaming_config
             st.balloons()
             st.success(f"🎉 Successfully generated {len(results)} Shorts!")
 
@@ -236,7 +351,11 @@ if "results" in st.session_state and st.session_state["results"]:
 
                 new_layout = st.selectbox(
                     "Layout",
-                    ["Smart Face-Crop (Portrait 9:16)", "Cinematic Blur Background (Full Frame)"],
+                    [
+                        "Smart Face-Crop (Portrait 9:16)",
+                        "🎮 Powder.gg Gaming Mode (Facecam + Gameplay Stack)",
+                        "Cinematic Blur Background (Full Frame)"
+                    ],
                     key=f"layout_{i}"
                 )
 
@@ -253,7 +372,7 @@ if "results" in st.session_state and st.session_state["results"]:
                                 p = ShortsPipeline()
 
                             # Re-render this specific clip from source video
-                            target_layout = "blur_fit" if "Blur" in new_layout else "crop"
+                            target_layout = layout_map.get(new_layout, "crop")
                             src_vid = clip.get("source_video_path", clip["video_path"])
                             v_name = clip.get("video_filename", os.path.splitext(os.path.basename(src_vid))[0])
                             
@@ -265,7 +384,16 @@ if "results" in st.session_state and st.session_state["results"]:
                             p.subtitle_engine.generate_ass(segments, new_start, new_end, ass_file)
                             
                             v_meta = get_video_info(src_vid) if os.path.exists(src_vid) else {"width": 1920, "height": 1080}
-                            crop_box = p.face_tracker.calculate_crop_window(src_vid, new_start, new_end, v_meta["width"], v_meta["height"]) if target_layout == "crop" else {}
+                            if target_layout == "gaming_split":
+                                crop_box = st.session_state.get("gaming_config") or {
+                                    "facecam": {"x": 1300, "y": 50, "w": 580, "h": 460},
+                                    "gameplay": {"x": 420, "y": 0, "w": 1080, "h": 1080},
+                                    "top_height": 760
+                                }
+                            elif target_layout == "crop":
+                                crop_box = p.face_tracker.calculate_crop_window(src_vid, new_start, new_end, v_meta["width"], v_meta["height"])
+                            else:
+                                crop_box = {}
                             
                             new_out_path = os.path.join(p.outputs_dir, f"Edited_Short_{clip['clip_number']}.mp4")
                             rendered = p.renderer.render_short(

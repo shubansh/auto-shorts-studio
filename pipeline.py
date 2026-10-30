@@ -58,6 +58,7 @@ class ShortsPipeline:
         subtitle_theme="Hormozi Gold (Viral)",
         enable_emojis=True,
         layout_mode="crop",
+        gaming_config=None,
         progress_callback=None
     ) -> list:
         """
@@ -129,9 +130,20 @@ class ShortsPipeline:
             clip_title = clip["title"]
             pct_base = 60 + int((idx / total_clips) * 35)
 
-            # Smart Crop Window (only needed if layout_mode == 'crop')
+            # Crop / Layout configuration
             crop_info = {"crop_w": 608, "crop_h": 1080, "crop_x": 0, "crop_y": 0}
-            if layout_mode == "crop":
+            if layout_mode == "gaming_split":
+                update_progress(
+                    f"Applying Gaming Split {clip_idx}/{total_clips}",
+                    pct_base,
+                    f"Stacking facecam and gameplay for '{clip_title}'..."
+                )
+                crop_info = gaming_config or {
+                    "facecam": {"x": 1300, "y": 50, "w": 580, "h": 460},
+                    "gameplay": {"x": 420, "y": 0, "w": 1080, "h": 1080},
+                    "top_height": 760
+                }
+            elif layout_mode == "crop":
                 update_progress(
                     f"Face Tracking Clip {clip_idx}/{total_clips}",
                     pct_base,
