@@ -640,70 +640,146 @@ elif st.session_state["current_nav"] == "Studio":
                             st.image(t["path"], caption=f"{int(t['timestamp'])}s", use_container_width=True)
 
             # -------------------------------------------------
-            # ✂️ CUT & DELETE PRE-ROLL INTRO (USER REQUEST)
+            # 🎬 NLE PROFESSIONAL TIMELINE & SPLIT / CUT TOOLS
             # -------------------------------------------------
             st.markdown("""
-            <div class="powder-card" style="border: 1px solid #ef4444; background: rgba(239, 68, 68, 0.08); margin-top: 14px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <h4 style="margin: 0; color: #f87171; font-size: 15px;">✂️ Cut & Delete Pre-Roll Intro (Permanently Start From Here)</h4>
-                    <span style="font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #fca5a5; padding: 2px 8px; border-radius: 4px; font-weight: 700;">Lossless 0.1s Fast</span>
+            <div class="powder-card" style="margin-top: 14px; border-color: #283147;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 16px;">🎬</span>
+                        <h4 style="margin: 0; color: #f8fafc; font-size: 15px;">Timeline Editor & Split Tools</h4>
+                    </div>
+                    <span style="font-size: 11px; background: rgba(204, 255, 0, 0.15); color: #ccff00; padding: 3px 8px; border-radius: 4px; font-weight: 700;">CapCut / Premiere Style</span>
                 </div>
-                <p style="color: #cbd5e1; font-size: 12px; margin: 0 0 10px 0;">
-                    Cut off the talking webcam intro and delete everything before your desired timestamp. The trimmed video becomes your new active project!
+                <p style="color: #94a3b8; font-size: 12px; margin: 0 0 12px 0;">
+                    Scrub the playhead needle to any frame, split at playhead, or 1-click ripple delete the intro before current time.
                 </p>
             </div>
             """, unsafe_allow_html=True)
 
-            trim_c1, trim_c2 = st.columns([2, 1])
-            with trim_c1:
-                cur_snap = int(st.session_state.get("snapshot_ts", 91.0))
-                trim_start_s = st.number_input("Delete video timeline before (seconds):", min_value=0, max_value=max(0, int(v_dur) - 10), value=min(int(v_dur) - 10, cur_snap), step=1)
-                m_t = f"{int(trim_start_s // 60):02d}:{int(trim_start_s % 60):02d}"
-                st.caption(f"📍 New video start: `{m_t}` | Deleted duration: **{trim_start_s}s**")
+            # Interactive Playhead Scrubber
+            cur_playhead = float(st.session_state.get("playhead_ts", 91.0))
+            cur_playhead = min(float(v_dur), max(0.0, cur_playhead))
+            
+            p_head_col, t_code_col = st.columns([3, 1])
+            with p_head_col:
+                new_playhead = st.slider(
+                    "Playhead Position (seconds):",
+                    0.0, float(v_dur),
+                    value=cur_playhead,
+                    step=1.0,
+                    key="editor_playhead_slider"
+                )
+                st.session_state["playhead_ts"] = new_playhead
 
-            with trim_c2:
-                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("✂️ Cut & Delete Intro", type="primary", use_container_width=True):
-                    if trim_start_s <= 0:
-                        st.warning("Please choose a timestamp greater than 0 to trim the intro!")
+            with t_code_col:
+                ph_m = int(new_playhead // 60)
+                ph_s = int(new_playhead % 60)
+                dur_m = int(v_dur // 60)
+                dur_s = int(v_dur % 60)
+                st.markdown(f"""
+                <div style="background: #090a10; border: 1px solid #283147; border-radius: 8px; padding: 10px; text-align: center; margin-top: 6px;">
+                    <div style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 700;">Playhead Timecode</div>
+                    <div style="font-family: monospace; font-size: 18px; font-weight: 800; color: #ccff00; margin-top: 2px;">
+                        {ph_m:02d}:{ph_s:02d} <span style="font-size: 12px; color: #64748b;">/ {dur_m:02d}:{dur_s:02d}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # Quick Scrubber Steppers
+            st.markdown("<div style='font-size: 11px; font-weight: 700; color: #94a3b8; margin: 4px 0 6px 0;'>QUICK SEEK CONTROLS:</div>", unsafe_allow_html=True)
+            k1, k2, k3, k4, k5 = st.columns(5)
+            with k1:
+                if st.button("⏪ -10s", use_container_width=True):
+                    st.session_state["playhead_ts"] = max(0.0, new_playhead - 10.0)
+                    st.rerun()
+            with k2:
+                if st.button("⏪ -2s", use_container_width=True):
+                    st.session_state["playhead_ts"] = max(0.0, new_playhead - 2.0)
+                    st.rerun()
+            with k3:
+                if st.button("📍 Seek Game (01:31)", use_container_width=True):
+                    st.session_state["playhead_ts"] = 91.0
+                    st.session_state["snapshot_ts"] = 91.0
+                    v_base = os.path.splitext(v_name)[0]
+                    p_frame = os.path.join(cache_dir, f"{v_base}_preview.jpg")
+                    extract_preview_frame(v_path, p_frame, timestamp=91.0)
+                    st.session_state["preview_frame"] = p_frame
+                    st.rerun()
+            with k4:
+                if st.button("⏩ +2s", use_container_width=True):
+                    st.session_state["playhead_ts"] = min(float(v_dur), new_playhead + 2.0)
+                    st.rerun()
+            with k5:
+                if st.button("⏩ +10s", use_container_width=True):
+                    st.session_state["playhead_ts"] = min(float(v_dur), new_playhead + 10.0)
+                    st.rerun()
+
+            # Editor Action Buttons: Ripple Delete & Split Tools
+            st.markdown("<div style='font-size: 11px; font-weight: 700; color: #cbd5e1; margin: 12px 0 6px 0;'>TIMELINE EDIT ACTIONS:</div>", unsafe_allow_html=True)
+            act_col1, act_col2 = st.columns(2)
+
+            with act_col1:
+                # 1-CLICK RIPPLE DELETE INTRO (Cut Left of Playhead)
+                if st.button(f"🗑️ Ripple Delete Intro (Cut Left of {ph_m:02d}:{ph_s:02d})", type="primary", use_container_width=True):
+                    if new_playhead <= 1.0:
+                        st.warning("Playhead is at the start! Scrub forward to where gameplay begins to delete the intro.")
                     else:
-                        with st.spinner("Losslessly trimming video in 0.1s..."):
+                        with st.spinner(f"Ripple deleting intro before {ph_m:02d}:{ph_s:02d} in 0.1s..."):
                             v_base = os.path.splitext(v_name)[0]
-                            trimmed_filename = f"{v_base}_trimmed_{int(trim_start_s)}s.mp4"
+                            trimmed_filename = f"{v_base}_cut_{int(new_playhead)}s.mp4"
                             trimmed_path = os.path.join(upload_dir, trimmed_filename)
-                            trim_video(v_path, trimmed_path, float(trim_start_s), v_dur)
+                            trim_video(v_path, trimmed_path, float(new_playhead), v_dur)
 
                             if os.path.exists(trimmed_path):
                                 st.session_state["video_path"] = trimmed_path
                                 meta = get_video_info(trimmed_path)
                                 st.session_state["video_meta"] = meta
-                                st.session_state["snapshot_ts"] = 10.0
+                                st.session_state["playhead_ts"] = 0.0
+                                st.session_state["snapshot_ts"] = 5.0
                                 p_frame = os.path.join(cache_dir, f"{os.path.splitext(trimmed_filename)[0]}_preview.jpg")
-                                extract_preview_frame(trimmed_path, p_frame, timestamp=10.0)
+                                extract_preview_frame(trimmed_path, p_frame, timestamp=5.0)
                                 st.session_state["preview_frame"] = p_frame
                                 st.session_state["timeline_thumbs"] = extract_timeline_thumbnails(trimmed_path, cache_dir, meta["duration"], count=6)
                                 st.session_state["discovered_clips"] = []
                                 st.session_state["selected_clip_indices"] = []
-                                st.success(f"Video trimmed! The first {trim_start_s}s have been removed. Project now starts directly from gameplay!")
+                                st.success(f"Intro successfully deleted! Video now starts directly from {ph_m:02d}:{ph_s:02d}.")
                                 st.rerun()
 
-            # -------------------------------------------------
-            # INTERACTIVE CLIP IN/OUT CUTTER (USER REQUEST)
-            # -------------------------------------------------
-            st.markdown("""
-            <div class="powder-card" style="margin-top: 16px;">
-                <h4 style="margin: 0 0 6px 0; color: #ccff00; font-size: 15px;">✂️ Interactive Timeline Clip Cutter (Mark In/Out)</h4>
-                <p style="color: #94a3b8; font-size: 12px; margin: 0 0 10px 0;">
-                    Select custom start and end timestamps directly to generate an exact short, bypassing full video AI scan!
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            with act_col2:
+                # 1-CLICK RIPPLE DELETE OUTRO (Cut Right of Playhead)
+                if st.button(f"🗑️ Ripple Delete Outro (Cut Right of {ph_m:02d}:{ph_s:02d})", use_container_width=True):
+                    if new_playhead >= v_dur - 2.0:
+                        st.warning("Playhead is at the end of the video!")
+                    else:
+                        with st.spinner(f"Trimming outro after {ph_m:02d}:{ph_s:02d}..."):
+                            v_base = os.path.splitext(v_name)[0]
+                            trimmed_filename = f"{v_base}_end_{int(new_playhead)}s.mp4"
+                            trimmed_path = os.path.join(upload_dir, trimmed_filename)
+                            trim_video(v_path, trimmed_path, 0.0, float(new_playhead))
 
-            default_cut_s = int(min(45, v_dur * 0.1))
+                            if os.path.exists(trimmed_path):
+                                st.session_state["video_path"] = trimmed_path
+                                meta = get_video_info(trimmed_path)
+                                st.session_state["video_meta"] = meta
+                                st.session_state["playhead_ts"] = 0.0
+                                st.session_state["snapshot_ts"] = 5.0
+                                p_frame = os.path.join(cache_dir, f"{os.path.splitext(trimmed_filename)[0]}_preview.jpg")
+                                extract_preview_frame(trimmed_path, p_frame, timestamp=5.0)
+                                st.session_state["preview_frame"] = p_frame
+                                st.session_state["timeline_thumbs"] = extract_timeline_thumbnails(trimmed_path, cache_dir, meta["duration"], count=6)
+                                st.session_state["discovered_clips"] = []
+                                st.session_state["selected_clip_indices"] = []
+                                st.success("Outro trimmed! Project updated.")
+                                st.rerun()
+
+            # In/Out Selection Range for Direct Short Export
+            st.markdown("<div style='font-size: 11px; font-weight: 700; color: #cbd5e1; margin: 12px 0 6px 0;'>CUSTOM SHORT EXPORT WINDOW:</div>", unsafe_allow_html=True)
+            default_cut_s = int(new_playhead)
             default_cut_e = int(min(v_dur, default_cut_s + 35))
             
             c_range = st.slider(
-                "Mark In / Out Range (Seconds):",
+                "Select In / Out Range to Export:",
                 0, int(v_dur),
                 value=(default_cut_s, default_cut_e),
                 step=1
@@ -715,7 +791,7 @@ elif st.session_state["current_nav"] == "Studio":
             with c_info1:
                 in_fmt = f"{int(cut_in//60):02d}:{int(cut_in%60):02d}"
                 out_fmt = f"{int(cut_out//60):02d}:{int(cut_out%60):02d}"
-                st.markdown(f"**Marked Cut:** `{in_fmt}` ──▶ `{out_fmt}` (Duration: **{cut_duration}s**)")
+                st.markdown(f"**Marked Short:** `{in_fmt}` ──▶ `{out_fmt}` (Duration: **{cut_duration}s**)")
             with c_info2:
                 if st.button("📸 Grab Frame at Cut Start", use_container_width=True):
                     st.session_state["snapshot_ts"] = float(cut_in)
@@ -732,7 +808,7 @@ elif st.session_state["current_nav"] == "Studio":
                 index=0
             )
 
-            if st.button(f"⚡ RENDER THIS {cut_duration}s CUT AS 9:16 SHORT (NVENC 60 FPS)", type="primary", use_container_width=True):
+            if st.button(f"⚡ RENDER THIS {cut_duration}s SELECTION AS 9:16 SHORT (NVENC 60 FPS)", type="primary", use_container_width=True):
                 if cut_duration <= 5:
                     st.error("Cut duration must be at least 5 seconds!")
                 else:
