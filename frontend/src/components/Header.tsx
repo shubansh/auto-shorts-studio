@@ -14,6 +14,7 @@ interface HeaderProps {
   activeProject?: Project | null;
   projects?: Project[];
   onSelectProject?: (id: string) => void;
+  saveStatus?: 'saved' | 'saving' | 'error';
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   onTriggerRender: () => void;
@@ -25,6 +26,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeProject,
   projects = [],
   onSelectProject,
+  saveStatus = 'saved',
   activeTab,
   setActiveTab,
   onTriggerRender,
@@ -68,10 +70,22 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           )}
 
-          <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            SQLite WAL
-          </span>
+          {saveStatus === 'saving' ? (
+            <span className="flex items-center gap-1 text-[10px] text-amber-400 font-mono px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-spin"></span>
+              Saving...
+            </span>
+          ) : saveStatus === 'error' ? (
+            <span className="flex items-center gap-1 text-[10px] text-rose-400 font-mono px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+              Save Error
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Saved to SQLite
+            </span>
+          )}
         </div>
       </div>
 

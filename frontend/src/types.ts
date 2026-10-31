@@ -38,6 +38,30 @@ export interface GamingLayoutConfig {
   game_w: number;
   game_h: number;
   face_height_pct?: number;
+  face_opacity?: number; // 0.0 - 1.0 (default: 1.0)
+  face_border?: number; // border width px (default: 0)
+  face_rounded?: number; // corner radius px (default: 0)
+  blur_intensity?: number; // background blur (default: 20)
+  safe_zone?: SafeZoneType;
+}
+
+export type SafeZoneType = 'none' | 'youtube' | 'tiktok' | 'instagram';
+
+export interface SceneKeyframe {
+  id: string;
+  timestamp: number;
+  layout_mode: ScreenMode;
+  gaming_config: GamingLayoutConfig;
+  single_crop_config: SingleCropConfig;
+  transition?: 'linear' | 'stepped';
+}
+
+export interface WaveformData {
+  source_mtime?: number;
+  audio_available: boolean;
+  duration: number;
+  sample_count: number;
+  peaks: number[];
 }
 
 export interface SingleCropConfig {
@@ -112,7 +136,7 @@ export interface ProjectState {
   };
   captions: ProjectStateCaptions;
   render_settings: ProjectStateRenderSettings;
-  scene_keyframes?: any[];
+  scene_keyframes?: SceneKeyframe[];
 }
 
 export interface MediaAsset {

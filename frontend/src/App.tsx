@@ -19,7 +19,9 @@ import type {
   SubtitleTheme,
   ClipMoment,
   SystemMetrics,
-  Project
+  Project,
+  ProjectState,
+  SceneKeyframe
 } from './types';
 import { RotateCw } from 'lucide-react';
 
@@ -44,7 +46,11 @@ export function App() {
     game_y: 5,
     game_w: 90,
     game_h: 90,
-    face_height_pct: 40
+    face_height_pct: 40,
+    face_opacity: 1.0,
+    face_border: 2,
+    face_rounded: 8,
+    blur_intensity: 22
   });
   const [singleCropConfig, setSingleCropConfig] = useState<SingleCropConfig>({
     crop_x: 28,
@@ -52,10 +58,15 @@ export function App() {
     crop_w: 44,
     crop_h: 100
   });
+  const [sceneKeyframes, setSceneKeyframes] = useState<SceneKeyframe[]>([]);
 
   // Captions Configuration
   const [subtitleTheme, setSubtitleTheme] = useState<SubtitleTheme>('Hormozi Gold (Viral)');
   const [enableEmojis, setEnableEmojis] = useState<boolean>(true);
+
+  // Persistence & Autosave Status
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const saveTimeoutRef = useRef<number | null>(null);
 
   // Loading & Processing States
   const [isScanning, setIsScanning] = useState(false);
@@ -80,6 +91,7 @@ export function App() {
     return () => {
       if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
     };
   }, []);
 
@@ -103,7 +115,7 @@ export function App() {
         const data: Project[] = await res.json();
         setProjects(data);
         if (data.length > 0 && !activeProject) {
-          const matched = data.find(p => p.id === session?.active_project_id) || data[0];
+          const matched = data.find((p) => p.id === session?.active_project_id) || data[0];
           setActiveProject(matched);
         }
       }
@@ -162,12 +174,17 @@ export function App() {
         if (state) {
           if (state.layout) {
             if (state.layout.mode) setScreenMode(state.layout.mode);
-            if (state.layout.gaming_config) setGamingConfig(state.layout.gaming_config);
+            if (state.layout.gaming_config) {
+              setGamingConfig((prev) => ({ ...prev, ...state.layout.gaming_config }));
+            }
             if (state.layout.single_crop_config) setSingleCropConfig(state.layout.single_crop_config);
           }
           if (state.captions) {
             if (state.captions.theme) setSubtitleTheme(state.captions.theme);
             if (typeof state.captions.enable_emojis === 'boolean') setEnableEmojis(state.captions.enable_emojis);
+          }
+          if (state.scene_keyframes) {
+            setSceneKeyframes(state.scene_keyframes);
           }
         }
         if (proj.media_filename && proj.media_filename !== session?.filename) {
@@ -179,7 +196,65 @@ export function App() {
     }
   };
 
-  // 3. Create Project
+  // 3. Debounced Non-Destructive Autosave
+  useEffect(() => {
+    if (!activeProject) return;
+
+    if (saveTimeoutRef.current) {
+      window.clearTimeout(saveTimeoutRef.current);
+    }
+
+    setSaveStatus('saving');
+
+    saveTimeoutRef.current = window.setTimeout(async () => {
+      try {
+        const updatedState: ProjectState = {
+          ...activeProject.project_state,
+          version: '1.0',
+          layout: {
+            mode: screenMode,
+            gaming_config: gamingConfig,
+            single_crop_config: singleCropConfig
+          },
+          captions: {
+            theme: subtitleTheme,
+            enable_emojis: enableEmojis,
+            corrections: activeProject.project_state.captions?.corrections || {}
+          },
+          scene_keyframes: sceneKeyframes
+        };
+
+        const res = await fetch(`/api/projects/${activeProject.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_state: updatedState })
+        });
+
+        if (res.ok) {
+          setSaveStatus('saved');
+        } else {
+          setSaveStatus('error');
+        }
+      } catch (e) {
+        console.warn('Debounced save error:', e);
+        setSaveStatus('error');
+      }
+    }, 1200);
+
+    return () => {
+      if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
+    };
+  }, [
+    activeProject?.id,
+    screenMode,
+    gamingConfig,
+    singleCropConfig,
+    subtitleTheme,
+    enableEmojis,
+    sceneKeyframes
+  ]);
+
+  // 4. Create Project
   const handleCreateProject = async (name: string, description?: string, media_filename?: string) => {
     try {
       const res = await fetch('/api/projects', {
@@ -198,7 +273,7 @@ export function App() {
     }
   };
 
-  // 4. Delete Project
+  // 5. Delete Project
   const handleDeleteProject = async (projectId: string) => {
     try {
       const res = await fetch(`/api/projects/${projectId}`, {
@@ -215,7 +290,7 @@ export function App() {
     }
   };
 
-  // 5. Select Local Session
+  // 6. Select Local Session
   const handleSelectLocalSession = async (filename: string) => {
     try {
       const res = await fetch('/api/sessions/select', {
@@ -234,7 +309,7 @@ export function App() {
     }
   };
 
-  // 6. Import YouTube Video
+  // 7. Import YouTube Video
   const handleImportYouTube = async (url: string) => {
     const res = await fetch('/api/import/youtube', {
       method: 'POST',
@@ -251,7 +326,7 @@ export function App() {
     await fetchLocalSessions();
   };
 
-  // 7. Upload File
+  // 8. Upload File
   const handleUploadFile = async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -269,12 +344,12 @@ export function App() {
     await fetchLocalSessions();
   };
 
-  // 8. Lossless Trim / Ripple Delete
-  const handleTrimVideo = async (startTime: number, endTime: number) => {
+  // 9. Lossless Trim / Mode A (Fast) or Mode B (Accurate)
+  const handleTrimVideo = async (startTime: number, endTime: number, mode: string = 'fast') => {
     const res = await fetch('/api/video/trim', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start_time: startTime, end_time: endTime })
+      body: JSON.stringify({ start_time: startTime, end_time: endTime, mode })
     });
     if (!res.ok) {
       const err = await res.json();
@@ -286,7 +361,7 @@ export function App() {
     await fetchLocalSessions();
   };
 
-  // 9. Fetch Frame at Timestamp
+  // 10. Fetch Frame at Timestamp
   const handleFetchFrameAtTime = async (timestamp: number): Promise<string> => {
     const res = await fetch(`/api/frame?timestamp=${timestamp}`);
     if (!res.ok) {
@@ -296,7 +371,7 @@ export function App() {
     return data.url;
   };
 
-  // 10. Scan Highlights (Ollama + Whisper)
+  // 11. Scan Highlights (Ollama + Whisper)
   const handleScanHighlights = async (
     numClips: number,
     minDur: number,
@@ -329,7 +404,7 @@ export function App() {
     }
   };
 
-  // 11. Clip Selection Handlers
+  // 12. Clip Selection Handlers
   const handleToggleClipSelection = (index: number) => {
     if (!session || !session.discovered_clips) return;
     const updated = [...session.discovered_clips];
@@ -354,7 +429,7 @@ export function App() {
     console.log('Previewing clip:', clip);
   };
 
-  // 12. Trigger Render (NVIDIA NVENC)
+  // 13. Trigger Render (NVIDIA NVENC)
   const handleTriggerRender = async () => {
     if (!session || !session.video_path) {
       alert('Please load a video first!');
@@ -450,6 +525,7 @@ export function App() {
           activeProject={activeProject}
           projects={projects}
           onSelectProject={handleSelectProject}
+          saveStatus={saveStatus}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           onTriggerRender={handleTriggerRender}
@@ -537,6 +613,8 @@ export function App() {
               setGamingConfig={setGamingConfig}
               singleCropConfig={singleCropConfig}
               setSingleCropConfig={setSingleCropConfig}
+              sceneKeyframes={sceneKeyframes}
+              setSceneKeyframes={setSceneKeyframes}
               onFetchFrameAtTime={handleFetchFrameAtTime}
               setActiveTab={setActiveTab}
             />

@@ -37,7 +37,8 @@ from core.audio import (
     extract_timeline_thumbnails,
     download_youtube_video,
     trim_video,
-    extract_audio
+    extract_audio,
+    generate_audio_waveform
 )
 from core.transcriber import AudioTranscriber
 from core.highlight_detector import HighlightDetector
@@ -220,8 +221,10 @@ class SelectVideoRequest(BaseModel):
     filename: str
 
 class TrimVideoRequest(BaseModel):
+    video_path: Optional[str] = Field(None, description="Optional path to video file to trim. Defaults to active session.")
     start_time: float = Field(..., ge=0.0)
     end_time: float = Field(..., gt=0.0)
+    mode: str = Field("fast", description="fast (keyframe stream copy) or accurate (NVENC/CPU re-encode)")
 
 class ScanHighlightsRequest(BaseModel):
     num_clips: int = Field(3, ge=1, le=10)
@@ -623,13 +626,41 @@ def get_frame_at_timestamp(timestamp: float = 0.0):
     rel_p = os.path.relpath(out_jpg, STORAGE_DIR).replace("\\", "/")
     return {"timestamp": ts, "url": f"/storage/{rel_p}"}
 
+@app.get("/api/media/waveform")
+def get_media_waveform(
+    filename: Optional[str] = None,
+    video_path: Optional[str] = None,
+    num_samples: int = 300
+):
+    """
+    Returns normalized audio peaks waveform for the active session or requested video.
+    Cached in storage/cache/<filename>_waveform_<num_samples>.json for instant load.
+    """
+    v_path = None
+    if video_path:
+        v_path = os.path.abspath(video_path)
+    elif filename:
+        v_path = get_safe_storage_path(filename, UPLOAD_DIR)
+    else:
+        v_path = session_state.get("video_path")
+        
+    if not v_path or not os.path.exists(v_path):
+        raise HTTPException(status_code=404, detail="Requested video file does not exist")
+        
+    try:
+        data = generate_audio_waveform(v_path, CACHE_DIR, num_samples=num_samples)
+        return data
+    except Exception as e:
+        logger.error(f"Waveform generation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/video/trim")
 def trim_current_video(req: TrimVideoRequest):
     """
     Trims current video between start_time and end_time.
-    Validates range against video duration.
+    Supports Mode A: Fast Keyframe Trim and Mode B: Accurate Frame Trim.
     """
-    v_path = session_state.get("video_path")
+    v_path = req.video_path or session_state.get("video_path")
     if not v_path or not os.path.exists(v_path):
         raise HTTPException(status_code=400, detail="No active video to trim")
 
@@ -643,7 +674,7 @@ def trim_current_video(req: TrimVideoRequest):
     trimmed_name = f"{v_base}_trim_{int(req.start_time)}s.mp4"
     trimmed_path = get_safe_storage_path(trimmed_name, UPLOAD_DIR)
 
-    trim_video(v_path, trimmed_path, req.start_time, req.end_time)
+    trim_res = trim_video(v_path, trimmed_path, req.start_time, req.end_time, mode=req.mode)
 
     if not os.path.exists(trimmed_path):
         raise HTTPException(status_code=500, detail="Trim operation failed to create output file")
@@ -654,9 +685,38 @@ def trim_current_video(req: TrimVideoRequest):
     p_frame = os.path.join(CACHE_DIR, f"{os.path.splitext(trimmed_name)[0]}_preview.jpg")
     extract_preview_frame(trimmed_path, p_frame, timestamp=min(5.0, meta["duration"] * 0.2))
     session_state["preview_frame"] = p_frame
-    session_state["timeline_thumbs"] = extract_timeline_thumbnails(trimmed_path, CACHE_DIR, meta["duration"], count=6)
+    session_state["timeline_thumbs"] = extract_timeline_thumbnails(trimmed_path, CACHE_DIR, meta["duration"], count=8)
     session_state["discovered_clips"] = []
-    return get_session()
+
+    # Update or create project in SQLite
+    new_p_id = str(uuid.uuid4())
+    media_id = str(uuid.uuid4())
+    now_iso = utc_now_iso()
+    meta["filename"] = trimmed_name
+    p_state = create_default_project_state(meta)
+    p_state["timeline"]["pre_roll_cut"] = req.start_time
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO projects (id, name, description, project_state_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (new_p_id, f"{v_base} (Trimmed)", f"Trimmed at {req.start_time}s ({trim_res['mode']})", json.dumps(p_state), now_iso, now_iso))
+        cursor.execute("""
+        INSERT INTO media_assets (
+            id, project_id, original_path, filename, duration, width, height, fps, codec, audio_available, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            media_id, new_p_id, trimmed_path, trimmed_name, meta["duration"], meta["width"], meta["height"], meta["fps"], "h264", 1, now_iso
+        ))
+    session_state["active_project_id"] = new_p_id
+
+    sess = get_session()
+    sess["success"] = True
+    sess["trimmed_video_path"] = trimmed_path
+    sess["mode"] = trim_res.get("mode", req.mode)
+    sess["project_id"] = new_p_id
+    sess["trim_result"] = trim_res
+    return sess
 
 @app.post("/api/highlights/scan")
 def scan_highlights(req: ScanHighlightsRequest):
