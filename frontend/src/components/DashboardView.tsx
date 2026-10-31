@@ -4,16 +4,21 @@ import {
   Film,
   Zap,
   Cpu,
-  Clock,
+  HardDrive,
+  Database,
   Sparkles,
   ChevronRight,
-  Play
+  Play,
+  RotateCw,
+  AlertTriangle
 } from 'lucide-react';
-import type { SessionData, LocalSession, ActiveTab } from '../types';
+import type { SessionData, LocalSession, ActiveTab, SystemMetrics } from '../types';
 
 interface DashboardViewProps {
   session: SessionData | null;
   localSessions: LocalSession[];
+  metrics: SystemMetrics | null;
+  metricsLoading: boolean;
   onSelectLocalSession: (filename: string) => void;
   setActiveTab: (tab: ActiveTab) => void;
   onOpenStudio: () => void;
@@ -22,6 +27,8 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   session,
   localSessions,
+  metrics,
+  metricsLoading,
   onSelectLocalSession,
   setActiveTab,
   onOpenStudio
@@ -65,49 +72,103 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 4 Quick Stat Cards */}
+      {/* 4 REAL SYSTEM TELEMETRY CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {/* GPU Telemetry Card */}
         <div className="bg-[#121520] border border-[#202538] rounded-xl p-4 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+          <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 shrink-0">
             <Zap className="w-6 h-6" />
           </div>
-          <div>
-            <div className="text-xs text-gray-400 font-medium">Render Engine</div>
-            <div className="text-lg font-black text-white">NVENC 60fps</div>
-            <div className="text-[10px] text-emerald-400">4.5x Real-Time GPU</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] text-gray-400 font-medium truncate">
+              {metrics?.gpu?.available ? metrics.gpu.name : 'GPU Status'}
+            </div>
+            {metricsLoading && !metrics ? (
+              <div className="h-6 w-24 bg-gray-800 animate-pulse rounded my-1"></div>
+            ) : metrics?.gpu?.available ? (
+              <div className="text-lg font-black text-white flex items-center gap-2">
+                <span>{metrics.gpu.util_pct}% Util</span>
+                {metrics.gpu.temp_c !== null && (
+                  <span className="text-xs text-purple-300 font-mono font-normal">
+                    {metrics.gpu.temp_c}°C
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-sm font-bold text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>CPU Fallback</span>
+              </div>
+            )}
+            <div className="text-[10px] text-purple-300 font-mono truncate">
+              {metrics?.gpu?.available
+                ? `VRAM: ${metrics.gpu.vram_used_mb} / ${metrics.gpu.vram_total_mb} MB`
+                : 'NVENC Offline'}
+            </div>
           </div>
         </div>
 
+        {/* CPU Telemetry Card */}
         <div className="bg-[#121520] border border-[#202538] rounded-xl p-4 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-[#ccff00]/10 border border-[#ccff00]/20 flex items-center justify-center text-[#ccff00]">
+          <div className="w-12 h-12 rounded-xl bg-[#ccff00]/10 border border-[#ccff00]/20 flex items-center justify-center text-[#ccff00] shrink-0">
             <Cpu className="w-6 h-6" />
           </div>
-          <div>
-            <div className="text-xs text-gray-400 font-medium">Whisper STT</div>
-            <div className="text-lg font-black text-white">CUDA 12 FP16</div>
-            <div className="text-[10px] text-gray-400">Word-Level Timestamps</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] text-gray-400 font-medium">
+              CPU ({metrics?.cpu?.cores || 4}C / {metrics?.cpu?.threads || 8}T)
+            </div>
+            {metricsLoading && !metrics ? (
+              <div className="h-6 w-20 bg-gray-800 animate-pulse rounded my-1"></div>
+            ) : (
+              <div className="text-lg font-black text-white">
+                {metrics?.cpu?.util_pct ?? 0}% Util
+              </div>
+            )}
+            <div className="text-[10px] text-emerald-400">
+              Multi-Thread Processing
+            </div>
           </div>
         </div>
 
+        {/* Host RAM Telemetry Card */}
         <div className="bg-[#121520] border border-[#202538] rounded-xl p-4 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-            <Film className="w-6 h-6" />
+          <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
+            <Database className="w-6 h-6" />
           </div>
-          <div>
-            <div className="text-xs text-gray-400 font-medium">Layout Split</div>
-            <div className="text-lg font-black text-white">Interactive Box</div>
-            <div className="text-[10px] text-cyan-400">Drag & Drop Face/Game</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] text-gray-400 font-medium">System RAM</div>
+            {metricsLoading && !metrics ? (
+              <div className="h-6 w-28 bg-gray-800 animate-pulse rounded my-1"></div>
+            ) : (
+              <div className="text-lg font-black text-white font-mono">
+                {metrics?.ram ? `${metrics.ram.used_gb} / ${metrics.ram.total_gb} GB` : '16 GB'}
+              </div>
+            )}
+            <div className="text-[10px] text-cyan-400 font-mono">
+              {metrics?.ram ? `${metrics.ram.free_gb} GB Free (${metrics.ram.util_pct}%)` : 'Checking memory...'}
+            </div>
           </div>
         </div>
 
+        {/* Local Disk Space Card */}
         <div className="bg-[#121520] border border-[#202538] rounded-xl p-4 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-            <Clock className="w-6 h-6" />
+          <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+            <HardDrive className="w-6 h-6" />
           </div>
-          <div>
-            <div className="text-xs text-gray-400 font-medium">Trim & Split</div>
-            <div className="text-lg font-black text-white">Lossless 0.1s</div>
-            <div className="text-[10px] text-amber-400">Instant Pre-Roll Slice</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] text-gray-400 font-medium">
+              Disk ({metrics?.disk?.drive || 'C:'})
+            </div>
+            {metricsLoading && !metrics ? (
+              <div className="h-6 w-24 bg-gray-800 animate-pulse rounded my-1"></div>
+            ) : (
+              <div className="text-lg font-black text-white font-mono">
+                {metrics?.disk ? `${metrics.disk.free_gb} GB Free` : 'Checking disk...'}
+              </div>
+            )}
+            <div className="text-[10px] text-amber-400 font-mono">
+              {metrics?.disk ? `${metrics.disk.total_gb} GB Total (${metrics.disk.util_pct}% Used)` : ''}
+            </div>
           </div>
         </div>
       </div>
@@ -134,7 +195,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             return (
               <div
                 key={item.filename}
-                className={`bg-[#121520] border rounded-xl p-4 transition-all hover:border-[#384160] group ${
+                className={`bg-[#121522] border rounded-xl p-4 transition-all hover:border-[#384160] group ${
                   isCurrent
                     ? 'border-[#ccff00] ring-1 ring-[#ccff00]/40'
                     : 'border-[#202538]'

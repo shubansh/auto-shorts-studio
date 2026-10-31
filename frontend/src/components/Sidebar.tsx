@@ -8,20 +8,24 @@ import {
   FileVideo,
   Settings,
   Cpu,
-  Film
+  Film,
+  Zap,
+  AlertTriangle
 } from 'lucide-react';
-import type { ActiveTab, SessionData } from '../types';
+import type { ActiveTab, SessionData, SystemMetrics } from '../types';
 
 interface SidebarProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   session: SessionData | null;
+  metrics?: SystemMetrics | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
-  session
+  session,
+  metrics
 }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -33,6 +37,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'settings', label: 'Settings & GPU', icon: Settings }
   ] as const;
 
+  const isGpuAvailable = metrics?.gpu?.available ?? true;
+  const gpuName = metrics?.gpu?.name || 'RTX 3050 NVENC';
+
   return (
     <aside className="w-64 bg-[#0e1017] border-r border-[#1f2333] flex flex-col justify-between shrink-0 select-none">
       {/* Brand Header */}
@@ -43,10 +50,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div>
             <div className="font-extrabold tracking-wider text-white text-base flex items-center gap-1.5">
-              POWDER <span className="text-[#ccff00] text-xs font-semibold px-1.5 py-0.5 rounded bg-[#ccff00]/10">AI</span>
+              CLIPFORGE <span className="text-[#ccff00] text-xs font-semibold px-1.5 py-0.5 rounded bg-[#ccff00]/10">AI</span>
             </div>
             <div className="text-[11px] text-gray-400 font-medium tracking-tight">
-              AutoShorts Studio
+              Local Shorts Studio
             </div>
           </div>
         </div>
@@ -88,22 +95,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Hardware Status Box */}
         <div className="bg-[#141722] border border-[#232738] rounded-xl p-2.5">
           <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-1.5">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span className="text-[11px] font-bold text-gray-200">
-                RTX 3050 NVENC
-              </span>
+            <div className="flex items-center gap-1.5 truncate">
+              {isGpuAvailable ? (
+                <>
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-[11px] font-bold text-gray-200 truncate" title={gpuName}>
+                    {gpuName}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="text-[11px] font-bold text-amber-300">CPU Mode</span>
+                </>
+              )}
             </div>
-            <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1 rounded font-mono">
-              60 FPS
+            <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1 rounded font-mono shrink-0">
+              {isGpuAvailable ? '60 FPS' : 'CPU'}
             </span>
           </div>
-          <div className="text-[10px] text-gray-400 flex items-center gap-1">
-            <Cpu className="w-3 h-3 text-[#ccff00]" />
-            <span>CUDA 12 • Local 100% Free</span>
+          <div className="text-[10px] text-gray-400 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Cpu className="w-3 h-3 text-[#ccff00]" />
+              <span>CUDA 12 Local</span>
+            </span>
+            {metrics?.gpu?.vram_used_mb !== undefined && (
+              <span className="font-mono text-purple-300 text-[9px]">
+                {metrics.gpu.vram_used_mb}MB
+              </span>
+            )}
           </div>
         </div>
 

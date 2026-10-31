@@ -17,7 +17,8 @@ import type {
   GamingLayoutConfig,
   SingleCropConfig,
   SubtitleTheme,
-  ClipMoment
+  ClipMoment,
+  SystemMetrics
 } from './types';
 import { RotateCw } from 'lucide-react';
 
@@ -26,6 +27,8 @@ export function App() {
   const [session, setSession] = useState<SessionData | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSession[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState<boolean>(true);
 
   // Layout Configuration
   const [screenMode, setScreenMode] = useState<ScreenMode>('gaming_split');
@@ -58,13 +61,36 @@ export function App() {
   const [renderProgress, setRenderProgress] = useState(0);
 
   const pollIntervalRef = useRef<number | null>(null);
+  const metricsIntervalRef = useRef<number | null>(null);
 
-  // 1. Initial Load: Fetch Session & Local Files
+  // 1. Initial Load: Fetch Session, Local Files, Library & Real Telemetry
   useEffect(() => {
     fetchSession();
     fetchLocalSessions();
     fetchLibrary();
+    fetchSystemMetrics();
+
+    // Poll live system hardware metrics every 3.5 seconds
+    metricsIntervalRef.current = window.setInterval(fetchSystemMetrics, 3500);
+
+    return () => {
+      if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
   }, []);
+
+  const fetchSystemMetrics = async () => {
+    try {
+      const res = await fetch('/api/system/metrics');
+      if (res.ok) {
+        const data: SystemMetrics = await res.json();
+        setSystemMetrics(data);
+        setMetricsLoading(false);
+      }
+    } catch (err) {
+      console.warn('Could not fetch hardware metrics:', err);
+    }
+  };
 
   const fetchSession = async () => {
     try {
@@ -249,7 +275,6 @@ export function App() {
   const handleTriggerRender = async () => {
     if (!session?.video_path) return;
 
-    // Filter selected clips or fallback to current selection
     const clipsToRender = (session.discovered_clips || []).filter(
       (c) => c.selected !== false
     );
@@ -315,11 +340,12 @@ export function App() {
 
   return (
     <div className="flex h-screen w-screen bg-[#0b0c10] text-gray-200 overflow-hidden font-sans">
-      {/* Powder Left Sidebar */}
+      {/* ClipForge Left Sidebar */}
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         session={session}
+        metrics={systemMetrics}
       />
 
       {/* Main Studio Work Area */}
@@ -367,6 +393,8 @@ export function App() {
             <DashboardView
               session={session}
               localSessions={localSessions}
+              metrics={systemMetrics}
+              metricsLoading={metricsLoading}
               onSelectLocalSession={handleSelectLocalSession}
               setActiveTab={setActiveTab}
               onOpenStudio={() => setActiveTab('studio')}

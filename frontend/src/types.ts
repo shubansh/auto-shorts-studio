@@ -84,6 +84,40 @@ export interface LibraryItem {
   video_url: string;
 }
 
+export interface SystemMetrics {
+  timestamp: number;
+  cpu: {
+    cores: number;
+    threads: number;
+    util_pct: number;
+  };
+  ram: {
+    total_gb: number;
+    used_gb: number;
+    free_gb: number;
+    util_pct: number;
+  };
+  disk: {
+    drive: string;
+    total_gb: number;
+    used_gb: number;
+    free_gb: number;
+    util_pct: number;
+  };
+  gpu: {
+    available: boolean;
+    name: string;
+    util_pct: number;
+    vram_used_mb: number;
+    vram_total_mb: number;
+    temp_c: number | null;
+    nvenc_supported: boolean;
+    cuda_available: boolean;
+    status: 'online' | 'unavailable' | 'error';
+    error?: string | null;
+  };
+}
+
 export type ActiveTab =
   | 'dashboard'
   | 'capture'
