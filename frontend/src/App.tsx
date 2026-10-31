@@ -18,13 +18,16 @@ import type {
   SingleCropConfig,
   SubtitleTheme,
   ClipMoment,
-  SystemMetrics
+  SystemMetrics,
+  Project
 } from './types';
 import { RotateCw } from 'lucide-react';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('studio');
   const [session, setSession] = useState<SessionData | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSession[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
@@ -63,9 +66,10 @@ export function App() {
   const pollIntervalRef = useRef<number | null>(null);
   const metricsIntervalRef = useRef<number | null>(null);
 
-  // 1. Initial Load: Fetch Session, Local Files, Library & Real Telemetry
+  // 1. Initial Load: Fetch Session, Projects, Local Files, Library & Real Telemetry
   useEffect(() => {
     fetchSession();
+    fetchProjects();
     fetchLocalSessions();
     fetchLibrary();
     fetchSystemMetrics();
@@ -89,6 +93,22 @@ export function App() {
       }
     } catch (err) {
       console.warn('Could not fetch hardware metrics:', err);
+    }
+  };
+
+  const fetchProjects = async () => {
+    try {
+      const res = await fetch('/api/projects');
+      if (res.ok) {
+        const data: Project[] = await res.json();
+        setProjects(data);
+        if (data.length > 0 && !activeProject) {
+          const matched = data.find(p => p.id === session?.active_project_id) || data[0];
+          setActiveProject(matched);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load persistent projects:', err);
     }
   };
 
@@ -131,7 +151,71 @@ export function App() {
     }
   };
 
-  // 2. Select Local Session
+  // 2. Select Project
+  const handleSelectProject = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      if (res.ok) {
+        const proj: Project = await res.json();
+        setActiveProject(proj);
+        const state = proj.project_state;
+        if (state) {
+          if (state.layout) {
+            if (state.layout.mode) setScreenMode(state.layout.mode);
+            if (state.layout.gaming_config) setGamingConfig(state.layout.gaming_config);
+            if (state.layout.single_crop_config) setSingleCropConfig(state.layout.single_crop_config);
+          }
+          if (state.captions) {
+            if (state.captions.theme) setSubtitleTheme(state.captions.theme);
+            if (typeof state.captions.enable_emojis === 'boolean') setEnableEmojis(state.captions.enable_emojis);
+          }
+        }
+        if (proj.media_filename && proj.media_filename !== session?.filename) {
+          await handleSelectLocalSession(proj.media_filename);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to select project:', err);
+    }
+  };
+
+  // 3. Create Project
+  const handleCreateProject = async (name: string, description?: string, media_filename?: string) => {
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description, media_filename })
+      });
+      if (res.ok) {
+        const created: Project = await res.json();
+        await fetchProjects();
+        await handleSelectProject(created.id);
+        setActiveTab('studio');
+      }
+    } catch (err) {
+      console.error('Failed to create project:', err);
+    }
+  };
+
+  // 4. Delete Project
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchProjects();
+        if (activeProject?.id === projectId) {
+          setActiveProject(null);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+    }
+  };
+
+  // 5. Select Local Session
   const handleSelectLocalSession = async (filename: string) => {
     try {
       const res = await fetch('/api/sessions/select', {
@@ -142,6 +226,7 @@ export function App() {
       if (res.ok) {
         const data = await res.json();
         setSession(data);
+        await fetchProjects();
         setActiveTab('studio');
       }
     } catch (err) {
@@ -149,7 +234,7 @@ export function App() {
     }
   };
 
-  // 3. Import YouTube Video
+  // 6. Import YouTube Video
   const handleImportYouTube = async (url: string) => {
     const res = await fetch('/api/import/youtube', {
       method: 'POST',
@@ -162,10 +247,11 @@ export function App() {
     }
     const data = await res.json();
     setSession(data);
-    fetchLocalSessions();
+    await fetchProjects();
+    await fetchLocalSessions();
   };
 
-  // 4. Upload File
+  // 7. Upload File
   const handleUploadFile = async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -179,10 +265,11 @@ export function App() {
     }
     const data = await res.json();
     setSession(data);
-    fetchLocalSessions();
+    await fetchProjects();
+    await fetchLocalSessions();
   };
 
-  // 5. Lossless Trim / Ripple Delete
+  // 8. Lossless Trim / Ripple Delete
   const handleTrimVideo = async (startTime: number, endTime: number) => {
     const res = await fetch('/api/video/trim', {
       method: 'POST',
@@ -195,10 +282,11 @@ export function App() {
     }
     const data = await res.json();
     setSession(data);
-    fetchLocalSessions();
+    await fetchProjects();
+    await fetchLocalSessions();
   };
 
-  // 6. Fetch Frame at Timestamp
+  // 9. Fetch Frame at Timestamp
   const handleFetchFrameAtTime = async (timestamp: number): Promise<string> => {
     const res = await fetch(`/api/frame?timestamp=${timestamp}`);
     if (!res.ok) {
@@ -208,7 +296,7 @@ export function App() {
     return data.url;
   };
 
-  // 7. Scan Highlights (Ollama + Whisper)
+  // 10. Scan Highlights (Ollama + Whisper)
   const handleScanHighlights = async (
     numClips: number,
     minDur: number,
@@ -227,76 +315,82 @@ export function App() {
           scan_start: scanStart
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        setSession((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            discovered_clips: data.clips.map((c: any) => ({ ...c, selected: true }))
-          };
-        });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Highlight scan failed');
       }
-    } catch (err) {
-      console.error('Scan highlights error:', err);
+      const data = await res.json();
+      setSession((prev) => (prev ? { ...prev, discovered_clips: data.clips } : null));
+      await fetchProjects();
+    } catch (err: any) {
+      alert(`Scanning Error: ${err.message}`);
     } finally {
       setIsScanning(false);
     }
   };
 
-  // 8. Toggle Clip Selection
+  // 11. Clip Selection Handlers
   const handleToggleClipSelection = (index: number) => {
-    setSession((prev) => {
-      if (!prev) return null;
-      const updated = [...prev.discovered_clips];
-      if (updated[index]) {
-        updated[index] = {
-          ...updated[index],
-          selected: updated[index].selected === false ? true : false
-        };
-      }
-      return { ...prev, discovered_clips: updated };
-    });
+    if (!session || !session.discovered_clips) return;
+    const updated = [...session.discovered_clips];
+    updated[index] = {
+      ...updated[index],
+      selected: !(updated[index].selected ?? true)
+    };
+    setSession({ ...session, discovered_clips: updated });
   };
 
   const handleSelectAllClips = () => {
-    setSession((prev) => {
-      if (!prev) return null;
-      const updated = prev.discovered_clips.map((c) => ({ ...c, selected: true }));
-      return { ...prev, discovered_clips: updated };
-    });
+    if (!session || !session.discovered_clips) return;
+    const allSelected = session.discovered_clips.every((c) => c.selected !== false);
+    const updated = session.discovered_clips.map((c) => ({
+      ...c,
+      selected: !allSelected
+    }));
+    setSession({ ...session, discovered_clips: updated });
   };
 
-  const handleSelectClipForPreview = (_clip: ClipMoment) => {
-    // Seek or load
+  const handleSelectClipForPreview = (clip: ClipMoment) => {
+    console.log('Previewing clip:', clip);
   };
 
-  // 9. Trigger Render
+  // 12. Trigger Render (NVIDIA NVENC)
   const handleTriggerRender = async () => {
-    if (!session?.video_path) return;
-
-    const clipsToRender = (session.discovered_clips || []).filter(
-      (c) => c.selected !== false
-    );
-
-    if (clipsToRender.length === 0) {
-      alert('Please select at least 1 clip moment to render!');
+    if (!session || !session.video_path) {
+      alert('Please load a video first!');
       return;
     }
 
-    setIsRendering(true);
-    setRenderStatusMsg('Starting GPU NVENC Render...');
-    setRenderProgress(5);
+    const selectedClips = (session.discovered_clips || []).filter(
+      (c) => c.selected !== false
+    );
+
+    const clipsToRender =
+      selectedClips.length > 0
+        ? selectedClips
+        : [
+            {
+              start: 0,
+              end: Math.min(30, session.meta?.duration || 30),
+              label: 'Full Highlight',
+              score: 9.0,
+              reason: 'Manual Export'
+            }
+          ];
 
     try {
+      setIsRendering(true);
+      setRenderProgress(0);
+      setRenderStatusMsg('Initializing GPU Render...');
+
       const res = await fetch('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clips: clipsToRender,
           layout_mode: screenMode,
-          gaming_config: screenMode === 'gaming_split' ? gamingConfig : undefined,
-          single_crop_config: screenMode === 'crop' ? singleCropConfig : undefined,
+          gaming_config: gamingConfig,
+          single_crop_config: singleCropConfig,
           subtitle_theme: subtitleTheme,
           enable_emojis: enableEmojis
         })
@@ -307,13 +401,12 @@ export function App() {
         throw new Error(err.detail || 'Render trigger failed');
       }
 
-      // Start polling status
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = window.setInterval(async () => {
         try {
-          const sRes = await fetch('/api/render/status');
-          if (sRes.ok) {
-            const statusData = await sRes.json();
+          const statusRes = await fetch('/api/render/status');
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
             setRenderProgress(statusData.progress || 0);
             setRenderStatusMsg(statusData.message || 'Processing...');
 
@@ -321,6 +414,7 @@ export function App() {
               clearInterval(pollIntervalRef.current!);
               setIsRendering(false);
               fetchLibrary();
+              fetchProjects();
               setActiveTab('library');
             } else if (statusData.status === 'error') {
               clearInterval(pollIntervalRef.current!);
@@ -353,6 +447,9 @@ export function App() {
         {/* Top Header */}
         <Header
           session={session}
+          activeProject={activeProject}
+          projects={projects}
+          onSelectProject={handleSelectProject}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           onTriggerRender={handleTriggerRender}
@@ -392,10 +489,15 @@ export function App() {
           {activeTab === 'dashboard' && (
             <DashboardView
               session={session}
+              projects={projects}
+              activeProject={activeProject}
               localSessions={localSessions}
               metrics={systemMetrics}
               metricsLoading={metricsLoading}
               onSelectLocalSession={handleSelectLocalSession}
+              onSelectProject={handleSelectProject}
+              onCreateProject={handleCreateProject}
+              onDeleteProject={handleDeleteProject}
               setActiveTab={setActiveTab}
               onOpenStudio={() => setActiveTab('studio')}
             />

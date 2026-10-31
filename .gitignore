@@ -16,3 +16,6 @@ storage/outputs/*
 .venv/
 frontend/node_modules/
 frontend/dist/
+storage/*.db
+storage/*.db-wal
+storage/*.db-shm

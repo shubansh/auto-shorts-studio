@@ -63,6 +63,7 @@ export interface RenderJob {
 }
 
 export interface SessionData {
+  active_project_id?: string | null;
   video_path: string | null;
   video_url: string | null;
   filename: string | null;
@@ -71,6 +72,96 @@ export interface SessionData {
   timeline_thumbs: TimelineThumb[];
   discovered_clips: ClipMoment[];
   render_job?: RenderJob;
+}
+
+export interface ProjectStateTimeline {
+  in_point: number;
+  out_point: number;
+  pre_roll_cut: number;
+  zoom: number;
+}
+
+export interface ProjectStateSourceMedia {
+  filename: string;
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+}
+
+export interface ProjectStateCaptions {
+  theme: SubtitleTheme;
+  enable_emojis: boolean;
+  corrections?: Record<string, string>;
+}
+
+export interface ProjectStateRenderSettings {
+  resolution: string;
+  fps: number;
+  encoder: string;
+}
+
+export interface ProjectState {
+  version: string;
+  source_media: ProjectStateSourceMedia;
+  timeline: ProjectStateTimeline;
+  layout: {
+    mode: ScreenMode;
+    gaming_config: GamingLayoutConfig;
+    single_crop_config: SingleCropConfig;
+  };
+  captions: ProjectStateCaptions;
+  render_settings: ProjectStateRenderSettings;
+  scene_keyframes?: any[];
+}
+
+export interface MediaAsset {
+  id: string;
+  project_id: string;
+  original_path: string;
+  filename: string;
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  audio_available: number;
+  proxy_path?: string | null;
+  thumbnail_path?: string | null;
+  created_at: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  project_state_json: string;
+  project_state: ProjectState;
+  media_filename?: string;
+  media_duration?: number;
+  media_width?: number;
+  media_height?: number;
+  clips_count?: number;
+  rendered_count?: number;
+  created_at: string;
+  updated_at: string;
+  media_asset?: MediaAsset | null;
+  clips?: ClipMoment[];
+}
+
+export interface SystemSettings {
+  whisper_model?: string;
+  ollama_model?: string;
+  preferred_resolution?: string;
+  preferred_fps?: number;
+  caption_theme?: string;
+  enable_emojis?: boolean;
+  layout_preset?: string;
+  hardware_preferences?: {
+    use_nvenc: boolean;
+    fallback_cpu: boolean;
+    compute_type: string;
+  };
 }
 
 export interface LocalSession {

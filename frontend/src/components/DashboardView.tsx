@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   UploadCloud,
   Film,
@@ -10,29 +10,59 @@ import {
   ChevronRight,
   Play,
   RotateCw,
-  AlertTriangle
+  AlertTriangle,
+  FolderPlus,
+  Trash2,
+  Clock,
+  Layers,
+  Scissors
 } from 'lucide-react';
-import type { SessionData, LocalSession, ActiveTab, SystemMetrics } from '../types';
+import type { SessionData, LocalSession, ActiveTab, SystemMetrics, Project } from '../types';
 
 interface DashboardViewProps {
   session: SessionData | null;
+  projects?: Project[];
+  activeProject?: Project | null;
   localSessions: LocalSession[];
   metrics: SystemMetrics | null;
   metricsLoading: boolean;
   onSelectLocalSession: (filename: string) => void;
+  onSelectProject?: (projectId: string) => void;
+  onCreateProject?: (name: string, description?: string, media_filename?: string) => void;
+  onDeleteProject?: (projectId: string) => void;
   setActiveTab: (tab: ActiveTab) => void;
   onOpenStudio: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   session,
+  projects = [],
+  activeProject,
   localSessions,
   metrics,
   metricsLoading,
   onSelectLocalSession,
+  onSelectProject,
+  onCreateProject,
+  onDeleteProject,
   setActiveTab,
   onOpenStudio
 }) => {
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newProjName, setNewProjName] = useState('');
+  const [newProjMedia, setNewProjMedia] = useState('');
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProjName.trim()) return;
+    if (onCreateProject) {
+      onCreateProject(newProjName.trim(), '', newProjMedia || undefined);
+    }
+    setNewProjName('');
+    setNewProjMedia('');
+    setShowCreateModal(false);
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8 animate-fadeIn">
       {/* Hero Banner */}
@@ -49,7 +79,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </span>
           </h2>
           <p className="text-sm text-gray-400 leading-relaxed">
-            Automatic Facecam & Gameplay visual alignment, Faster-Whisper GPU transcription, Ollama highlight detection, and CapCut-style lossless pre-roll trimming.
+            Persistent SQLite projects, automatic Facecam & Gameplay visual alignment, Faster-Whisper GPU transcription, Ollama highlight detection, and CapCut-style lossless pre-roll trimming.
           </p>
           <div className="flex items-center gap-4 pt-2">
             <button
@@ -58,6 +88,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <UploadCloud className="w-4 h-4" />
               <span>Import New Gameplay</span>
+            </button>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#1b2032] text-white font-bold text-xs hover:bg-[#252c46] border border-[#2f3854] transition-all"
+            >
+              <FolderPlus className="w-4 h-4 text-[#00d2ff]" />
+              <span>New Project</span>
             </button>
             {session?.video_path && (
               <button
@@ -173,12 +210,121 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Available Local Projects Grid */}
+      {/* SQLITE PERSISTENT PROJECTS GRID */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <Layers className="w-4 h-4 text-[#ccff00]" />
+            <span>Saved Projects ({projects.length})</span>
+          </h3>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="text-xs text-[#ccff00] hover:underline flex items-center gap-1 font-bold"
+          >
+            <FolderPlus className="w-3.5 h-3.5" />
+            <span>Create New Project</span>
+          </button>
+        </div>
+
+        {projects.length === 0 ? (
+          <div className="bg-[#121522] border border-[#202538] rounded-xl p-8 text-center text-gray-400 text-xs">
+            No projects found. Import gameplay or select a local video below to create your first project.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {projects.map((proj) => {
+              const isCurrent = activeProject?.id === proj.id || session?.active_project_id === proj.id;
+              const formattedDate = new Date(proj.updated_at).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+
+              return (
+                <div
+                  key={proj.id}
+                  className={`bg-[#121522] border rounded-xl p-4 transition-all hover:border-[#384160] group relative flex flex-col justify-between ${
+                    isCurrent
+                      ? 'border-[#ccff00] ring-1 ring-[#ccff00]/40 shadow-lg shadow-[#ccff00]/10'
+                      : 'border-[#202538]'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="font-bold text-sm text-white truncate group-hover:text-[#ccff00]" title={proj.name}>
+                        {proj.name}
+                      </div>
+                      {isCurrent && (
+                        <span className="shrink-0 text-[10px] bg-[#ccff00]/20 text-[#ccff00] px-2 py-0.5 rounded-full font-bold">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    {proj.media_filename && (
+                      <div className="text-[11px] text-gray-400 truncate mb-2 flex items-center gap-1.5 font-mono">
+                        <Film className="w-3 h-3 text-cyan-400 shrink-0" />
+                        <span className="truncate">{proj.media_filename}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-3 text-[10px] text-gray-400 font-mono mb-4">
+                      {proj.media_duration ? (
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-gray-500" />
+                          {Math.floor(proj.media_duration / 60)}m {Math.floor(proj.media_duration % 60)}s
+                        </span>
+                      ) : null}
+                      <span className="flex items-center gap-1">
+                        <Scissors className="w-3 h-3 text-amber-400" />
+                        {proj.clips_count || 0} clips
+                      </span>
+                      <span>{formattedDate}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2 border-t border-[#1b2032]">
+                    <button
+                      onClick={() => {
+                        if (onSelectProject) onSelectProject(proj.id);
+                        setActiveTab('studio');
+                      }}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                        isCurrent
+                          ? 'bg-[#ccff00] text-black hover:bg-[#b8e600]'
+                          : 'bg-[#1b2030] text-gray-200 hover:bg-[#252b42] hover:text-white'
+                      }`}
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>{isCurrent ? 'Continue Studio' : 'Open Project'}</span>
+                    </button>
+                    {onDeleteProject && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Delete project "${proj.name}"? (Original media file will not be deleted)`)) {
+                            onDeleteProject(proj.id);
+                          }
+                        }}
+                        className="p-2 rounded-lg bg-[#181b28] hover:bg-red-500/20 text-gray-400 hover:text-red-400 border border-[#252a3d] transition-colors"
+                        title="Delete project metadata"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Available Local Videos Grid */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
             <Film className="w-4 h-4 text-[#ccff00]" />
-            <span>Local Video Files ({localSessions.length})</span>
+            <span>Raw Local Media Files ({localSessions.length})</span>
           </h3>
           <button
             onClick={() => setActiveTab('capture')}
@@ -226,13 +372,79 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   }`}
                 >
                   <Play className="w-3 h-3 fill-current" />
-                  <span>{isCurrent ? 'Open Studio' : 'Switch Project'}</span>
+                  <span>{isCurrent ? 'Open Studio' : 'Edit Video'}</span>
                 </button>
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Create Project Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-[#141724] border border-[#292f44] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#23283c]">
+              <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                <FolderPlus className="w-4 h-4 text-[#ccff00]" />
+                <span>Create New Project</span>
+              </h3>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-gray-400 hover:text-white text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-gray-300 font-semibold mb-1">Project Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Valorant Ace Clutch Clip"
+                  value={newProjName}
+                  onChange={(e) => setNewProjName(e.target.value)}
+                  className="w-full bg-[#0d1017] border border-[#2b3248] rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-[#ccff00]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-gray-300 font-semibold mb-1">Link Source Video (Optional)</label>
+                <select
+                  value={newProjMedia}
+                  onChange={(e) => setNewProjMedia(e.target.value)}
+                  className="w-full bg-[#0d1017] border border-[#2b3248] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-[#ccff00]"
+                >
+                  <option value="">None (Import later)</option>
+                  {localSessions.map((s) => (
+                    <option key={s.filename} value={s.filename}>
+                      {s.filename} ({s.size_mb} MB)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2 rounded-lg bg-[#1f2438] text-gray-300 hover:text-white font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg bg-[#ccff00] text-black font-extrabold hover:bg-[#b8e600] transition-transform hover:scale-105"
+                >
+                  Create Project
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

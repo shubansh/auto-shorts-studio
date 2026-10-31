@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import time
+import uuid
 import shutil
 import logging
 from typing import Optional, List, Dict, Any
@@ -41,6 +42,20 @@ from core.audio import (
 from core.transcriber import AudioTranscriber
 from core.highlight_detector import HighlightDetector
 from core.system_monitor import get_real_system_metrics
+from core.database import (
+    init_db,
+    migrate_existing_uploads_to_projects,
+    get_all_projects,
+    get_project_by_id,
+    save_project,
+    delete_project_metadata,
+    get_all_settings,
+    set_setting,
+    get_db,
+    create_default_project_state,
+    utc_now_iso,
+    DB_PATH
+)
 from pipeline import ShortsPipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -132,9 +147,21 @@ def validate_remote_url(url: str) -> str:
 
 
 # -------------------------------------------------------------
-# GLOBAL IN-MEMORY SESSION STATE
+# DATABASE PERSISTENCE INITIALIZATION
+# -------------------------------------------------------------
+try:
+    init_db()
+    migrated_count = migrate_existing_uploads_to_projects()
+    if migrated_count > 0:
+        logger.info(f"Successfully migrated {migrated_count} legacy media files to SQLite projects.")
+except Exception as e:
+    logger.error(f"Failed to initialize SQLite database: {e}")
+
+# -------------------------------------------------------------
+# GLOBAL IN-MEMORY SESSION STATE (BACKED BY SQLITE)
 # -------------------------------------------------------------
 session_state: Dict[str, Any] = {
+    "active_project_id": None,
     "video_path": None,
     "video_meta": {"width": 1920, "height": 1080, "duration": 0.0, "fps": 30.0},
     "preview_frame": None,
@@ -143,7 +170,7 @@ session_state: Dict[str, Any] = {
     "render_job": {"status": "idle", "progress": 0, "message": "", "results": []}
 }
 
-# Auto-load latest uploaded video if available
+# Auto-load latest project / video if available
 existing_vids = [
     f for f in os.listdir(UPLOAD_DIR)
     if os.path.splitext(f)[1].lower() in ALLOWED_VIDEO_EXTENSIONS and not f.endswith(".part")
@@ -159,6 +186,13 @@ if existing_vids:
         extract_preview_frame(latest_vid, p_frame, timestamp=min(45.0, meta["duration"] * 0.2))
         session_state["preview_frame"] = p_frame
         session_state["timeline_thumbs"] = extract_timeline_thumbnails(latest_vid, CACHE_DIR, meta["duration"], count=6)
+        
+        # Link to corresponding SQLite project if present
+        all_projs = get_all_projects()
+        for p in all_projs:
+            if p.get("media_filename") == existing_vids[0]:
+                session_state["active_project_id"] = p["id"]
+                break
     except Exception as e:
         logger.warning(f"Could not auto-load initial video: {e}")
 
@@ -166,6 +200,19 @@ if existing_vids:
 # -------------------------------------------------------------
 # PYDANTIC SCHEMAS
 # -------------------------------------------------------------
+class CreateProjectRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = ""
+    media_filename: Optional[str] = None
+
+class UpdateProjectRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    project_state: Optional[Dict[str, Any]] = None
+
+class UpdateSettingsRequest(BaseModel):
+    settings: Dict[str, Any]
+
 class YouTubeImportRequest(BaseModel):
     url: str
 
@@ -218,7 +265,7 @@ async def get_system_metrics():
 
 @app.get("/api/session")
 def get_session():
-    """Returns active editing session metadata, thumbnails, and preview URLs."""
+    """Returns active editing session metadata, thumbnails, preview URLs, and SQLite project ID."""
     v_path = session_state.get("video_path")
     v_url = None
     p_url = None
@@ -239,6 +286,7 @@ def get_session():
             thumbs_urls.append({"timestamp": t["timestamp"], "url": f"/storage/{rel_t}"})
 
     return {
+        "active_project_id": session_state.get("active_project_id"),
         "video_path": v_path,
         "video_url": v_url,
         "filename": os.path.basename(v_path) if v_path else None,
@@ -248,6 +296,144 @@ def get_session():
         "discovered_clips": session_state.get("discovered_clips", []),
         "render_job": session_state.get("render_job")
     }
+
+# -------------------------------------------------------------
+# PERSISTENT PROJECTS API (SQLITE BACKED)
+# -------------------------------------------------------------
+
+@app.get("/api/projects")
+def list_projects():
+    """Returns all projects stored in SQLite ordered by updated_at descending."""
+    return get_all_projects()
+
+@app.post("/api/projects")
+def create_project(req: CreateProjectRequest):
+    """Creates a new persistent project with non-destructive initial state."""
+    name_clean = req.name.strip()
+    if not name_clean:
+        raise HTTPException(status_code=400, detail="Project name cannot be empty")
+        
+    project_id = str(uuid.uuid4())
+    now_iso = utc_now_iso()
+    
+    media_info = None
+    media_id = None
+    target_path = None
+    
+    if req.media_filename:
+        target_path = get_safe_storage_path(req.media_filename, UPLOAD_DIR)
+        if not os.path.exists(target_path):
+            raise HTTPException(status_code=404, detail="Referenced media file does not exist in uploads")
+        try:
+            media_info = get_video_info(target_path)
+            media_info["filename"] = os.path.basename(target_path)
+        except Exception as e:
+            logger.warning(f"Failed to probe media for new project: {e}")
+            media_info = {"width": 1920, "height": 1080, "duration": 60.0, "fps": 30.0, "filename": req.media_filename}
+            
+    proj_state = create_default_project_state(media_info)
+    
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO projects (id, name, description, project_state_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (project_id, name_clean, req.description or "", json.dumps(proj_state), now_iso, now_iso))
+        
+        if req.media_filename and target_path and os.path.exists(target_path):
+            media_id = str(uuid.uuid4())
+            cursor.execute("""
+            INSERT INTO media_assets (
+                id, project_id, original_path, filename, duration, width, height, fps, codec, audio_available, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                media_id,
+                project_id,
+                target_path,
+                os.path.basename(target_path),
+                media_info.get("duration", 0.0),
+                media_info.get("width", 1920),
+                media_info.get("height", 1080),
+                media_info.get("fps", 30.0),
+                "h264",
+                1,
+                now_iso
+            ))
+            
+    session_state["active_project_id"] = project_id
+    if target_path and os.path.exists(target_path):
+        session_state["video_path"] = target_path
+        session_state["video_meta"] = media_info
+    return get_project_by_id(project_id)
+
+@app.get("/api/projects/{project_id}")
+def get_project(project_id: str):
+    """Retrieves full project details including media asset, clips, and render history."""
+    proj = get_project_by_id(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return proj
+
+@app.put("/api/projects/{project_id}")
+def update_project(project_id: str, req: UpdateProjectRequest):
+    """
+    Non-destructively updates project metadata and project_state JSON.
+    Guarantees original source media remains untouched.
+    """
+    existing = get_project_by_id(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    new_name = req.name.strip() if req.name is not None else existing["name"]
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Project name cannot be empty")
+    new_desc = req.description if req.description is not None else existing.get("description", "")
+    new_state = req.project_state if req.project_state is not None else existing.get("project_state", {})
+    
+    # Validate JSON serializability
+    try:
+        json.dumps(new_state)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid project_state: {e}")
+        
+    updated = save_project(project_id, new_name, new_state, new_desc)
+    return updated
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: str, delete_media: bool = False):
+    """
+    Deletes project metadata from SQLite.
+    Original source video is PRESERVED by default (delete_media=False).
+    """
+    existing = get_project_by_id(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    success = delete_project_metadata(project_id, delete_media_files=delete_media)
+    if session_state.get("active_project_id") == project_id:
+        session_state["active_project_id"] = None
+        
+    return {
+        "status": "deleted",
+        "project_id": project_id,
+        "media_deleted": delete_media
+    }
+
+# -------------------------------------------------------------
+# SYSTEM SETTINGS API (SQLITE PERSISTED)
+# -------------------------------------------------------------
+
+@app.get("/api/settings")
+def get_system_settings_route():
+    """Returns persisted user and hardware preferences from SQLite."""
+    return get_all_settings()
+
+@app.post("/api/settings")
+def update_system_settings_route(req: UpdateSettingsRequest):
+    """Updates one or more system settings in SQLite."""
+    for k, v in req.settings.items():
+        set_setting(k, v)
+    return get_all_settings()
 
 @app.get("/api/sessions/local")
 def get_local_sessions():
@@ -281,6 +467,37 @@ def select_local_session(req: SelectVideoRequest):
     session_state["preview_frame"] = p_frame
     session_state["timeline_thumbs"] = extract_timeline_thumbnails(target, CACHE_DIR, meta["duration"], count=6)
     session_state["discovered_clips"] = []
+
+    # Find or link corresponding SQLite project
+    matched_id = None
+    for p in get_all_projects():
+        if p.get("media_filename") == req.filename:
+            matched_id = p["id"]
+            break
+            
+    if matched_id:
+        session_state["active_project_id"] = matched_id
+    else:
+        new_p_id = str(uuid.uuid4())
+        media_id = str(uuid.uuid4())
+        now_iso = utc_now_iso()
+        meta["filename"] = req.filename
+        p_state = create_default_project_state(meta)
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO projects (id, name, description, project_state_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (new_p_id, v_base, f"Project for {req.filename}", json.dumps(p_state), now_iso, now_iso))
+            cursor.execute("""
+            INSERT INTO media_assets (
+                id, project_id, original_path, filename, duration, width, height, fps, codec, audio_available, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                media_id, new_p_id, target, req.filename, meta["duration"], meta["width"], meta["height"], meta["fps"], "h264", 1, now_iso
+            ))
+        session_state["active_project_id"] = new_p_id
+
     return get_session()
 
 @app.post("/api/import/youtube")
@@ -299,6 +516,29 @@ def import_youtube(req: YouTubeImportRequest):
         session_state["preview_frame"] = p_frame
         session_state["timeline_thumbs"] = extract_timeline_thumbnails(downloaded, CACHE_DIR, meta["duration"], count=6)
         session_state["discovered_clips"] = []
+
+        # Create persistent SQLite project
+        new_p_id = str(uuid.uuid4())
+        media_id = str(uuid.uuid4())
+        now_iso = utc_now_iso()
+        f_name = os.path.basename(downloaded)
+        meta["filename"] = f_name
+        p_state = create_default_project_state(meta)
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO projects (id, name, description, project_state_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (new_p_id, v_base, f"Imported stream: {f_name}", json.dumps(p_state), now_iso, now_iso))
+            cursor.execute("""
+            INSERT INTO media_assets (
+                id, project_id, original_path, filename, duration, width, height, fps, codec, audio_available, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                media_id, new_p_id, downloaded, f_name, meta["duration"], meta["width"], meta["height"], meta["fps"], "h264", 1, now_iso
+            ))
+        session_state["active_project_id"] = new_p_id
+
         return get_session()
     except Exception as e:
         logger.error(f"YouTube import failed: {e}")
@@ -344,6 +584,28 @@ async def import_upload(file: UploadFile = File(...)):
     session_state["preview_frame"] = p_frame
     session_state["timeline_thumbs"] = extract_timeline_thumbnails(target_path, CACHE_DIR, meta["duration"], count=6)
     session_state["discovered_clips"] = []
+
+    # Create persistent SQLite project for uploaded video
+    new_p_id = str(uuid.uuid4())
+    media_id = str(uuid.uuid4())
+    now_iso = utc_now_iso()
+    meta["filename"] = safe_name
+    p_state = create_default_project_state(meta)
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO projects (id, name, description, project_state_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (new_p_id, v_base, f"Uploaded: {safe_name}", json.dumps(p_state), now_iso, now_iso))
+        cursor.execute("""
+        INSERT INTO media_assets (
+            id, project_id, original_path, filename, duration, width, height, fps, codec, audio_available, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            media_id, new_p_id, target_path, safe_name, meta["duration"], meta["width"], meta["height"], meta["fps"], "h264", 1, now_iso
+        ))
+    session_state["active_project_id"] = new_p_id
+
     return get_session()
 
 @app.get("/api/frame")
@@ -427,16 +689,53 @@ def scan_highlights(req: ScanHighlightsRequest):
         )
 
         session_state["discovered_clips"] = clips
+
+        # Persist discovered clips into clip_moments table
+        proj_id = session_state.get("active_project_id")
+        if proj_id:
+            try:
+                with get_db() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM media_assets WHERE project_id = ? LIMIT 1", (proj_id,))
+                    m_row = cursor.fetchone()
+                    media_id = m_row["id"] if m_row else None
+                    for c in clips:
+                        c_id = str(uuid.uuid4())
+                        cursor.execute("""
+                        INSERT INTO clip_moments (
+                            id, project_id, media_asset_id, start_time, end_time, category, hook_text, highlight_score, selected, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            c_id,
+                            proj_id,
+                            media_id,
+                            float(c.get("start", 0.0)),
+                            float(c.get("end", 30.0)),
+                            str(c.get("label", "Highlight")),
+                            str(c.get("reason", ""))[:120],
+                            float(c.get("score", 8.0)),
+                            1,
+                            utc_now_iso()
+                        ))
+            except Exception as ex:
+                logger.warning(f"Could not persist clip moments to SQLite: {ex}")
+
         return {"clips": clips}
     except Exception as e:
         logger.error(f"Highlight scan failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def run_render_task(req: RenderRequest):
-    """Background rendering worker using NVIDIA NVENC."""
+def run_render_task(req: RenderRequest, job_id: Optional[str] = None, proj_id: Optional[str] = None):
+    """Background rendering worker using NVIDIA NVENC with SQLite persistence."""
     v_path = session_state.get("video_path")
     if not v_path:
         session_state["render_job"] = {"status": "error", "progress": 0, "message": "No video loaded"}
+        if job_id:
+            try:
+                with get_db() as conn:
+                    conn.execute("UPDATE render_jobs SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?", ("No video loaded", utc_now_iso(), job_id))
+            except Exception:
+                pass
         return
 
     try:
@@ -445,6 +744,12 @@ def run_render_task(req: RenderRequest):
         def on_prog(title, pct, msg):
             session_state["render_job"]["progress"] = int(pct)
             session_state["render_job"]["message"] = f"{title}: {msg}"
+            if job_id:
+                try:
+                    with get_db() as conn:
+                        conn.execute("UPDATE render_jobs SET progress = ?, updated_at = ? WHERE id = ?", (int(pct), utc_now_iso(), job_id))
+                except Exception:
+                    pass
 
         pipeline = ShortsPipeline()
         results = pipeline.process(
@@ -470,6 +775,19 @@ def run_render_task(req: RenderRequest):
             "message": "Render completed successfully!",
             "results": results
         }
+
+        if job_id:
+            primary_out = results[0]["video_path"] if results else ""
+            try:
+                with get_db() as conn:
+                    conn.execute("""
+                    UPDATE render_jobs
+                    SET status = 'completed', progress = 100, output_path = ?, updated_at = ?
+                    WHERE id = ?
+                    """, (primary_out, utc_now_iso(), job_id))
+            except Exception as ex:
+                logger.warning(f"Could not update completed render job: {ex}")
+
     except Exception as e:
         logger.error(f"Render failed: {e}")
         session_state["render_job"] = {
@@ -478,18 +796,74 @@ def run_render_task(req: RenderRequest):
             "message": f"Render failed: {str(e)}",
             "results": []
         }
+        if job_id:
+            try:
+                with get_db() as conn:
+                    conn.execute("""
+                    UPDATE render_jobs
+                    SET status = 'failed', error_message = ?, updated_at = ?
+                    WHERE id = ?
+                    """, (str(e), utc_now_iso(), job_id))
+            except Exception:
+                pass
 
 @app.post("/api/render")
 def trigger_render(req: RenderRequest, bg_tasks: BackgroundTasks):
-    """Triggers background GPU render job."""
+    """Triggers background GPU render job and records it in SQLite."""
     v_path = session_state.get("video_path")
     if not v_path or not os.path.exists(v_path):
         raise HTTPException(status_code=400, detail="No active video in session")
     if not req.clips:
         raise HTTPException(status_code=400, detail="No clips specified to render")
 
-    bg_tasks.add_task(run_render_task, req)
-    return {"status": "started", "message": f"Rendering {len(req.clips)} clips in background..."}
+    # Ensure we have a valid project_id
+    proj_id = session_state.get("active_project_id")
+    if not proj_id:
+        v_name = os.path.basename(v_path)
+        for p in get_all_projects():
+            if p.get("media_filename") == v_name:
+                proj_id = p["id"]
+                session_state["active_project_id"] = proj_id
+                break
+        if not proj_id:
+            proj_id = str(uuid.uuid4())
+            with get_db() as conn:
+                conn.execute("""
+                INSERT INTO projects (id, name, description, project_state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    proj_id,
+                    os.path.splitext(v_name)[0],
+                    "Render project",
+                    json.dumps(create_default_project_state(session_state.get("video_meta"))),
+                    utc_now_iso(),
+                    utc_now_iso()
+                ))
+            session_state["active_project_id"] = proj_id
+
+    job_id = str(uuid.uuid4())
+    now_iso = utc_now_iso()
+    try:
+        with get_db() as conn:
+            conn.execute("""
+            INSERT INTO render_jobs (id, project_id, status, progress, render_settings_json, created_at, updated_at)
+            VALUES (?, ?, 'rendering', 0, ?, ?, ?)
+            """, (
+                job_id,
+                proj_id,
+                json.dumps({
+                    "layout_mode": req.layout_mode,
+                    "clips_count": len(req.clips),
+                    "subtitle_theme": req.subtitle_theme
+                }),
+                now_iso,
+                now_iso
+            ))
+    except Exception as ex:
+        logger.warning(f"Could not record render job in SQLite: {ex}")
+
+    bg_tasks.add_task(run_render_task, req, job_id, proj_id)
+    return {"status": "started", "job_id": job_id, "message": f"Rendering {len(req.clips)} clips in background..."}
 
 @app.get("/api/render/status")
 def get_render_status():

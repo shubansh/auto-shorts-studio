@@ -3,12 +3,17 @@ import {
   ChevronLeft,
   Zap,
   Sliders,
-  RotateCw
+  RotateCw,
+  Database,
+  ChevronDown
 } from 'lucide-react';
-import type { SessionData, ActiveTab } from '../types';
+import type { SessionData, ActiveTab, Project } from '../types';
 
 interface HeaderProps {
   session: SessionData | null;
+  activeProject?: Project | null;
+  projects?: Project[];
+  onSelectProject?: (id: string) => void;
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   onTriggerRender: () => void;
@@ -17,6 +22,9 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   session,
+  activeProject,
+  projects = [],
+  onSelectProject,
   activeTab,
   setActiveTab,
   onTriggerRender,
@@ -35,15 +43,35 @@ export const Header: React.FC<HeaderProps> = ({
             <ChevronLeft className="w-4 h-4" />
           </button>
         )}
-        <div>
-          <h1 className="text-sm font-bold text-white flex items-center gap-2">
-            {session?.filename || 'Untitled Game Session'}
-            {session?.meta && (
-              <span className="text-[10px] bg-[#1e2333] text-gray-400 px-2 py-0.5 rounded font-mono font-normal">
-                {Math.floor(session.meta.duration / 60)}m {Math.floor(session.meta.duration % 60)}s
-              </span>
-            )}
-          </h1>
+        <div className="flex items-center gap-2">
+          {projects.length > 1 && onSelectProject ? (
+            <select
+              value={activeProject?.id || ''}
+              onChange={(e) => onSelectProject(e.target.value)}
+              className="bg-[#141724] border border-[#232738] text-white text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:border-[#ccff00]"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <h1 className="text-sm font-bold text-white flex items-center gap-2">
+              {activeProject?.name || session?.filename || 'Untitled Game Session'}
+            </h1>
+          )}
+
+          {session?.meta && (
+            <span className="text-[10px] bg-[#1e2333] text-gray-400 px-2 py-0.5 rounded font-mono font-normal">
+              {Math.floor(session.meta.duration / 60)}m {Math.floor(session.meta.duration % 60)}s
+            </span>
+          )}
+
+          <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            SQLite WAL
+          </span>
         </div>
       </div>
 
