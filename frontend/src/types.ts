@@ -10,15 +10,29 @@ export interface TimelineThumb {
   url: string;
 }
 
+export interface HQSBreakdown {
+  hook: number;
+  audio: number;
+  event: number;
+  context: number;
+  visual: number;
+}
+
 export interface ClipMoment {
   id?: string;
   start: number;
   end: number;
   score: number;
+  hqs?: number; // 0 - 100 Explainable Highlight Quality Score
+  hqs_breakdown?: HQSBreakdown;
+  title?: string;
+  hook_text?: string;
   reason: string;
   label?: string;
   tags?: string[];
   selected?: boolean;
+  confidence?: number;
+  transcript_snippet?: string;
 }
 
 export interface BoxRect {
@@ -250,3 +264,46 @@ export type SubtitleTheme =
   | 'Neon Cyberpunk'
   | 'Mint Clean'
   | 'Clean Minimalist';
+
+export type GameType =
+  | 'generic'
+  | 'valorant'
+  | 'cs2'
+  | 'fortnite'
+  | 'pubg'
+  | 'minecraft'
+  | 'gtav';
+
+export type AIScanStage =
+  | 'initialization'
+  | 'audio_intelligence'
+  | 'transcription'
+  | 'visual_analysis'
+  | 'ollama_reasoning'
+  | 'persistence'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface AIScanJobStatus {
+  id: string;
+  project_id?: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  stage: AIScanStage;
+  stage_name: string;
+  message: string;
+  clips?: ClipMoment[];
+  error?: string;
+}
+
+export interface AIScanOptions {
+  num_clips: number;
+  min_duration: number;
+  max_duration: number;
+  scan_start: number;
+  game_type: GameType;
+  whisper_model: string;
+  ollama_model: string;
+  sensitivity: number;
+}

@@ -1,35 +1,32 @@
 import json
 import re
 import logging
+import urllib.request
+import urllib.error
 import ollama
+from typing import Dict, Any, List, Optional
+from core.highlight_fusion import fuse_multimodal_candidates
 
 logger = logging.getLogger(__name__)
 
-HIGHLIGHT_SYSTEM_PROMPT = """You are a world-class viral video editor specializing in YouTube Shorts, TikTok, and Instagram Reels (inspired by OpusClip and Powder.gg).
+OLLAMA_API_BASE = "http://127.0.0.1:11434"
 
-Your job is to analyze video transcripts with timestamps and find the most captivating, high-retention moments.
-
-Key Criteria for a Viral Short:
-1. Strong Hook: The first 3 seconds must grab attention immediately (a question, bold claim, intense moment, or high curiosity).
-2. Cohesive Story: The clip must contain a standalone thought or punchline. Do not cut in the middle of a sentence.
-3. Duration: Each clip should be between {min_duration} and {max_duration} seconds.
-4. Retention: Engaging flow without long silences.
-
-Output MUST be a JSON array of objects with this EXACT structure:
-[
-  {{
-    "start": float,
-    "end": float,
-    "title": "Catchy 3-5 Word Title",
-    "hook_score": 9.5,
-    "reason": "Why this moment will perform well as a Short"
-  }}
-]
-Return ONLY the raw JSON array, with no markdown formatting, no backticks, and no introductory text.
-"""
+def get_available_ollama_models() -> List[str]:
+    """Queries local Ollama service for installed models."""
+    try:
+        req = urllib.request.Request(f"{OLLAMA_API_BASE}/api/tags", headers={"User-Agent": "ClipForge/2.1"})
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                if models:
+                    return models
+    except Exception:
+        pass
+    return ["llama3.2:latest"]
 
 def clean_json_response(raw_text: str) -> str:
-    """Extracts and sanitizes JSON array string from potentially markdown-wrapped text."""
+    """Extracts and sanitizes JSON array or object string from potentially markdown-wrapped text."""
     text = raw_text.strip()
     if text.startswith("```json"):
         text = text[7:]
@@ -50,189 +47,134 @@ def clean_json_response(raw_text: str) -> str:
     text = re.sub(r',\s*([}\]])', r'\1', text)
     return text
 
+CONTEXTUAL_REASONING_PROMPT = """You are an expert AI gaming content strategist for YouTube Shorts and TikTok.
+Evaluate the following candidate gameplay highlights. Each candidate was detected using audio energy, speech, and motion sensors.
+
+Review each candidate and return an improved viral title (3-5 words), a high-retention hook question or punchline (under 10 words), and refined reasoning.
+
+Candidates:
+{candidates_json}
+
+Output MUST be a JSON array with this EXACT structure for each candidate:
+[
+  {{
+    "index": 0,
+    "refined_title": "Catchy 3-5 Word Title",
+    "hook_text": "Strong opening hook or question",
+    "viral_reason": "Clear explanation of why this moment is engaging"
+  }}
+]
+Return ONLY raw JSON, with no markdown formatting, no backticks, and no conversational preamble.
+"""
+
 class HighlightDetector:
-    def __init__(self, model_name="llama3.2:latest"):
+    def __init__(self, model_name: str = "llama3.2:latest"):
         self.model_name = model_name
 
-    def find_highlights(self, transcript_data: dict, num_clips=3, min_duration=25, max_duration=60, scan_start=0.0, scan_end=None) -> list:
+    def find_highlights(
+        self,
+        transcript_data: Dict[str, Any],
+        audio_signals: Optional[Dict[str, Any]] = None,
+        visual_signals: Optional[Dict[str, Any]] = None,
+        num_clips: int = 3,
+        min_duration: float = 20.0,
+        max_duration: float = 50.0,
+        scan_start: float = 0.0,
+        scan_end: Optional[float] = None,
+        game_type: str = "generic",
+        sensitivity: float = 1.0
+    ) -> List[Dict[str, Any]]:
         """
-        Calls Ollama to detect top viral moments.
-        Returns a list of highlight dictionaries with verified start and end times.
-        Supports scanning a restricted sub-range (e.g. ignoring intro).
+        Executes Multi-Signal Highlight Discovery:
+          1. Fuses Audio reactions, Speech transcripts, and Visual motion into candidate windows.
+          2. Calculates Explainable Highlight Quality Score (HQS).
+          3. Queries local Ollama model to refine title, hook text, and contextual storytelling.
+          4. Returns validated, non-hallucinated candidate list.
         """
         segments = transcript_data.get("segments", [])
-        if not segments:
-            logger.warning("No segments found in transcript.")
+        total_duration = 60.0
+        if segments:
+            total_duration = max(segments[-1].get("end", 60.0), 60.0)
+        if audio_signals and audio_signals.get("duration", 0) > 0:
+            total_duration = max(total_duration, audio_signals["duration"])
+
+        # Default empty signals if missing
+        if not audio_signals:
+            audio_signals = {"audio_events": [], "silence_segments": []}
+        if not visual_signals:
+            visual_signals = {"action_bursts": [], "scene_transitions": []}
+
+        # Step 1: Deterministic Multi-Signal Fusion & HQS Scoring
+        base_candidates = fuse_multimodal_candidates(
+            audio_signals=audio_signals,
+            visual_signals=visual_signals,
+            transcript_data=transcript_data,
+            total_duration=total_duration,
+            num_clips=num_clips,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            scan_start=scan_start,
+            game_type=game_type,
+            sensitivity=sensitivity
+        )
+
+        if not base_candidates:
+            logger.warning("No highlight candidates generated by multi-signal fusion.")
             return []
 
-        # Filter to active scan window if specified
-        if scan_start > 0 or (scan_end is not None and scan_end > 0):
-            filtered = [
-                s for s in segments
-                if s["end"] >= scan_start and (scan_end is None or s["start"] <= scan_end)
-            ]
-            if filtered:
-                segments = filtered
+        # Step 2: Contextual LLM Reasoning with Ollama
+        # Prepare structured summary for Ollama
+        candidates_payload = []
+        for idx, c in enumerate(base_candidates):
+            candidates_payload.append({
+                "index": idx,
+                "start": c["start"],
+                "end": c["end"],
+                "duration": c["duration"],
+                "tags": c["tags"],
+                "initial_title": c["title"],
+                "signals": c["reason"],
+                "transcript": c.get("transcript_snippet", "")
+            })
 
-        total_duration = segments[-1]["end"]
-        
-        # If total video duration is already under max_duration, return the whole video as a single clip
-        if total_duration <= max_duration:
-            logger.info(f"Video is only {total_duration:.1f}s, creating single clip.")
-            return [{
-                "start": 0.0,
-                "end": round(total_duration, 2),
-                "title": "Complete Highlight",
-                "hook_score": 9.0,
-                "reason": "Short video repurposing entire segment."
-            }]
-
-        # Prepare condensed transcript representation for LLM prompt
-        # We group segments into ~15s blocks with timestamps
-        formatted_lines = []
-        for s in segments:
-            formatted_lines.append(f"[{s['start']:.1f}s - {s['end']:.1f}s] {s['text']}")
-        transcript_text = "\n".join(formatted_lines)
-
-        # Truncate if exceptionally long to fit comfortable context
-        if len(transcript_text) > 25000:
-            transcript_text = transcript_text[:25000] + "\n...[truncated]"
-
-        user_prompt = f"""Video Total Duration: {total_duration:.1f} seconds.
-Desired Clips Count: {num_clips}
-Target Clip Duration: {min_duration}s to {max_duration}s.
-
-Transcript with Timestamps:
-{transcript_text}
-
-Identify the top {num_clips} viral moments and return the JSON array:"""
+        user_content = CONTEXTUAL_REASONING_PROMPT.format(
+            candidates_json=json.dumps(candidates_payload, indent=2)
+        )
 
         try:
-            system_prompt = HIGHLIGHT_SYSTEM_PROMPT.format(
-                min_duration=min_duration,
-                max_duration=max_duration
-            )
-            logger.info(f"Querying Ollama ({self.model_name}) for highlights...")
+            logger.info(f"Querying Ollama ({self.model_name}) for contextual reasoning on {len(base_candidates)} candidates...")
             response = ollama.chat(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_content}
                 ],
                 options={"temperature": 0.3}
             )
 
-            raw_reply = response["message"]["content"]
+            raw_reply = response.get("message", {}).get("content", "")
             cleaned = clean_json_response(raw_reply)
-            clips = json.loads(cleaned)
+            refinements = json.loads(cleaned)
 
-            if isinstance(clips, list) and len(clips) > 0:
-                validated_clips = self._validate_and_snap_clips(clips, segments, min_duration, max_duration, total_duration)
-                if validated_clips:
-                    # Sort by hook_score descending
-                    validated_clips.sort(key=lambda x: x.get("hook_score", 0), reverse=True)
-                    return validated_clips[:num_clips]
+            if isinstance(refinements, list):
+                for item in refinements:
+                    idx = item.get("index")
+                    if isinstance(idx, int) and 0 <= idx < len(base_candidates):
+                        if item.get("refined_title"):
+                            base_candidates[idx]["title"] = str(item["refined_title"]).strip()
+                        if item.get("hook_text"):
+                            base_candidates[idx]["hook_text"] = str(item["hook_text"]).strip()
+                        if item.get("viral_reason"):
+                            base_candidates[idx]["reason"] = str(item["viral_reason"]).strip()
 
         except Exception as e:
-            logger.error(f"Ollama highlight detection failed or returned invalid JSON: {e}")
+            logger.warning(f"Ollama reasoning skipped or failed ({e}); using multi-signal fused metadata.")
 
-        # Fallback heuristic if LLM fails
-        logger.info("Using smart heuristic fallback for highlight selection...")
-        return self._heuristic_fallback(segments, num_clips, min_duration, max_duration, total_duration)
+        # Ensure all required fields exist for UI & SQLite
+        for c in base_candidates:
+            if "hook_text" not in c:
+                c["hook_text"] = c.get("title", "Check this moment!")
+            if "score" not in c:
+                c["score"] = round(c.get("hqs", 80.0) / 10.0, 1)
+            c["selected"] = True
 
-    def _validate_and_snap_clips(self, raw_clips, segments, min_dur, max_dur, total_dur):
-        """Sanitizes start/end bounds and snaps to actual speech boundaries."""
-        valid = []
-        for c in raw_clips:
-            try:
-                start = float(c.get("start", 0))
-                end = float(c.get("end", 0))
-                if start < 0: start = 0.0
-                if end > total_dur: end = total_dur
-                
-                # Snap start to nearest segment start
-                start = self._snap_to_segment(start, segments, mode="start")
-                # Snap end to nearest segment end
-                end = self._snap_to_segment(end, segments, mode="end")
-
-                dur = end - start
-                if dur < (min_dur * 0.7):
-                    end = min(total_dur, start + min_dur)
-                elif dur > (max_dur * 1.2):
-                    end = start + max_dur
-
-                h_score = float(c.get("hook_score", 8.5))
-                v_score = int(h_score * 10) if h_score <= 10.0 else int(h_score)
-                tags = self._extract_tags_for_range(segments, start, end)
-
-                valid.append({
-                    "start": round(start, 2),
-                    "end": round(end, 2),
-                    "title": c.get("title", f"Clip at {int(start)}s"),
-                    "hook_score": h_score,
-                    "virality_score": v_score,
-                    "tags": tags,
-                    "reason": c.get("reason", "Detected engaging moment")
-                })
-            except Exception as ex:
-                logger.warning(f"Skipping invalid clip candidate {c}: {ex}")
-        return valid
-
-    def _extract_tags_for_range(self, segments, start, end):
-        text_in_range = " ".join([s.get("text", "") for s in segments if s.get("end", 0) >= start and s.get("start", 0) <= end]).lower()
-        tags = []
-        if any(k in text_in_range for k in ["kill", "headshot", "mara", "died", "dead", "shoot", "knock", "hit", "fire", "attack"]):
-            tags.append("💀 Kill")
-        if any(k in text_in_range for k in ["win", "won", "victory", "jeet", "booyah", "chicken", "champion", "op", "pro"]):
-            tags.append("👑 Victory")
-        if any(k in text_in_range for k in ["haha", "lmao", "lol", "hasna", "funny", "joke", "comedy"]):
-            tags.append("😂 Laughter")
-        if any(k in text_in_range for k in ["bhai", "aag", "omg", "what", "bro", "shout", "chillao", "loud", "wah", "dekho"]):
-            tags.append("🔊 Loudness")
-        if any(k in text_in_range for k in ["clutch", "1v4", "1v3", "save", "rush"]):
-            tags.append("⚡ Clutch")
-        if not tags:
-            tags = ["⚡ Clip it", "🔥 Highlight"]
-        return tags[:3]
-
-    def _snap_to_segment(self, timestamp, segments, mode="start"):
-        closest = timestamp
-        min_diff = 999.0
-        for s in segments:
-            t = s["start"] if mode == "start" else s["end"]
-            diff = abs(t - timestamp)
-            if diff < min_diff and diff < 3.0: # within 3 seconds
-                min_diff = diff
-                closest = t
-        return closest
-
-    def _heuristic_fallback(self, segments, num_clips, min_duration, max_duration, total_duration):
-        """Fallback: splits video into engaging chunks based on speech density and questions."""
-        clips = []
-        target_dur = (min_duration + max_duration) / 2.0
-        step = max(1, len(segments) // (num_clips + 1))
-        
-        for i in range(0, len(segments), step):
-            if len(clips) >= num_clips:
-                break
-            seg_start = segments[i]["start"]
-            target_end = seg_start + target_dur
-            if target_end > total_duration:
-                target_end = total_duration
-            
-            if (target_end - seg_start) >= min_duration * 0.7:
-                # Find title from first segment text
-                first_txt = segments[i].get("text", "Highlight Moment")
-                title = " ".join(first_txt.split()[:5])
-                v_score = 88 - (len(clips) * 6)
-                tags = self._extract_tags_for_range(segments, seg_start, target_end)
-                clips.append({
-                    "start": round(seg_start, 2),
-                    "end": round(target_end, 2),
-                    "title": title or f"Highlight Clip {len(clips)+1}",
-                    "hook_score": 8.5,
-                    "virality_score": v_score,
-                    "tags": tags,
-                    "reason": "Automated speech density highlight selection."
-                })
-        return clips
+        return base_candidates

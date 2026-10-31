@@ -40,8 +40,11 @@ from core.audio import (
     extract_audio,
     generate_audio_waveform
 )
+from core.audio_intelligence import analyze_audio_signals
+from core.visual_intelligence import analyze_visual_signals, GAME_PRESETS
+from core.highlight_fusion import fuse_multimodal_candidates
 from core.transcriber import AudioTranscriber
-from core.highlight_detector import HighlightDetector
+from core.highlight_detector import HighlightDetector, get_available_ollama_models
 from core.system_monitor import get_real_system_metrics
 from core.database import (
     init_db,
@@ -227,10 +230,25 @@ class TrimVideoRequest(BaseModel):
     mode: str = Field("fast", description="fast (keyframe stream copy) or accurate (NVENC/CPU re-encode)")
 
 class ScanHighlightsRequest(BaseModel):
+    video_path: Optional[str] = None
     num_clips: int = Field(3, ge=1, le=10)
     min_duration: int = Field(20, ge=10, le=120)
     max_duration: int = Field(50, ge=15, le=180)
     scan_start: float = Field(0.0, ge=0.0)
+    game_type: str = Field("generic")
+    whisper_model: str = Field("small")
+    ollama_model: str = Field("llama3.2:latest")
+    sensitivity: float = Field(1.0, ge=0.5, le=2.0)
+
+class UpdateClipMomentRequest(BaseModel):
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    category: Optional[str] = None
+    hook_text: Optional[str] = None
+    selected: Optional[bool] = None
+
+# Active background AI highlight scanning tasks
+ai_scan_jobs: Dict[str, Dict[str, Any]] = {}
 
 class RenderRequest(BaseModel):
     clips: List[Dict[str, Any]]
@@ -742,34 +760,367 @@ def trim_current_video(req: TrimVideoRequest):
     sess["trim_result"] = trim_res
     return sess
 
+def run_ai_scan_task(scan_id: str, req: ScanHighlightsRequest, v_path: str, proj_id: Optional[str]):
+    """
+    Multi-stage asynchronous background AI highlight discovery task:
+      Stage 1: Multi-Signal Audio Intelligence (RMS, screams, laughter, silence)
+      Stage 2: Speech Recognition with Faster-Whisper GPU & VRAM release
+      Stage 3: Lightweight Visual Intelligence with OpenCV
+      Stage 4: Multi-Signal Candidate Fusion & Windowing
+      Stage 5: Local Ollama Contextual LLM Reasoning & Explainable HQS
+      Stage 6: SQLite Persistence in clip_moments
+    """
+    v_base = os.path.splitext(os.path.basename(v_path))[0]
+    job = ai_scan_jobs.get(scan_id)
+    if not job:
+        return
+
+    try:
+        # Check cancellation
+        if job.get("cancelled"):
+            return
+
+        # Stage 1: Audio Extraction & Multi-Signal Analysis (15% - 35%)
+        job["stage"] = "audio_analysis"
+        job["stage_name"] = "Multi-Signal Audio Intelligence"
+        job["progress"] = 15
+        job["message"] = "Analyzing audio energy, reaction peaks, screams, and silence..."
+
+        audio_file = os.path.join(AUDIO_DIR, f"{v_base}.wav")
+        if not os.path.exists(audio_file):
+            extract_audio(v_path, audio_file)
+
+        audio_signals = analyze_audio_signals(v_path, CACHE_DIR)
+        if job.get("cancelled"):
+            return
+
+        # Stage 2: Faster-Whisper Speech Recognition on GPU (35% - 55%)
+        job["stage"] = "transcription"
+        job["stage_name"] = "Faster-Whisper Speech Intelligence"
+        job["progress"] = 35
+        job["message"] = f"Transcribing commentary with Faster-Whisper ({req.whisper_model})..."
+
+        cache_file = os.path.join(CACHE_DIR, f"{v_base}_transcript.json")
+        t_data = AudioTranscriber.load_cache(cache_file)
+        if not t_data:
+            transcriber = AudioTranscriber(model_size=req.whisper_model)
+            try:
+                t_data = transcriber.transcribe(audio_file)
+                AudioTranscriber.save_cache(t_data, cache_file)
+            finally:
+                # Free Whisper GPU VRAM immediately before visual analysis / Ollama
+                transcriber.release_vram()
+        if job.get("cancelled"):
+            return
+
+        # Stage 3: Lightweight Visual Analysis with OpenCV (55% - 70%)
+        job["stage"] = "visual_analysis"
+        job["stage_name"] = "OpenCV Visual Intelligence"
+        job["progress"] = 55
+        job["message"] = f"Scanning scene changes and motion activity ({req.game_type})..."
+
+        visual_signals = analyze_visual_signals(
+            v_path,
+            CACHE_DIR,
+            game_type=req.game_type,
+            audio_events=audio_signals.get("audio_events")
+        )
+        if job.get("cancelled"):
+            return
+
+        # Stage 4: Multi-Signal Fusion & Ollama Contextual Reasoning (70% - 90%)
+        job["stage"] = "ollama_reasoning"
+        job["stage_name"] = "Ollama AI Contextual Reasoning"
+        job["progress"] = 75
+        job["message"] = f"Ranking moments and generating viral hooks with Ollama ({req.ollama_model})..."
+
+        detector = HighlightDetector(model_name=req.ollama_model)
+        clips = detector.find_highlights(
+            transcript_data=t_data,
+            audio_signals=audio_signals,
+            visual_signals=visual_signals,
+            num_clips=req.num_clips,
+            min_duration=req.min_duration,
+            max_duration=req.max_duration,
+            scan_start=req.scan_start,
+            game_type=req.game_type,
+            sensitivity=req.sensitivity
+        )
+        if job.get("cancelled"):
+            return
+
+        # Stage 5: Persistence to SQLite (90% - 100%)
+        job["stage"] = "persistence"
+        job["stage_name"] = "Saving Highlights"
+        job["progress"] = 92
+        job["message"] = f"Persisting {len(clips)} discovered highlights to SQLite..."
+
+        if proj_id:
+            try:
+                with get_db() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM media_assets WHERE project_id = ? LIMIT 1", (proj_id,))
+                    m_row = cursor.fetchone()
+                    media_id = m_row["id"] if m_row else None
+
+                    # Clear prior unselected clips or append
+                    for c in clips:
+                        c_id = str(uuid.uuid4())
+                        c["id"] = c_id
+                        cursor.execute("""
+                        INSERT INTO clip_moments (
+                            id, project_id, media_asset_id, start_time, end_time, category, hook_text, highlight_score, detection_metadata_json, selected, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            c_id,
+                            proj_id,
+                            media_id,
+                            float(c.get("start", 0.0)),
+                            float(c.get("end", 30.0)),
+                            str(c.get("tags", ["Highlight"])[0]),
+                            str(c.get("hook_text", c.get("title", "")))[:150],
+                            float(c.get("hqs", c.get("score", 8.0) * 10.0)),
+                            json.dumps(c),
+                            1,
+                            utc_now_iso()
+                        ))
+            except Exception as ex:
+                logger.warning(f"Could not persist clip moments to SQLite: {ex}")
+
+        # Update Session & Job Completion
+        session_state["discovered_clips"] = clips
+        job["status"] = "completed"
+        job["progress"] = 100
+        job["message"] = f"Discovered {len(clips)} viral gaming highlights!"
+        job["clips"] = clips
+
+    except Exception as e:
+        logger.error(f"Background AI scan failed: {e}")
+        job["status"] = "failed"
+        job["progress"] = 0
+        job["error"] = str(e)
+        job["message"] = f"AI highlight scan failed: {str(e)}"
+
+# -------------------------------------------------------------
+# PHASE 5 AI HIGHLIGHT DISCOVERY ROUTES
+# -------------------------------------------------------------
+
+@app.post("/api/ai/scan")
+def trigger_ai_scan(req: ScanHighlightsRequest, bg_tasks: BackgroundTasks):
+    """Initiates an asynchronous multi-signal AI highlight scan."""
+    v_path = req.video_path or session_state.get("video_path")
+    if not v_path or not os.path.exists(v_path):
+        raise HTTPException(status_code=400, detail="No active or valid video file to scan")
+
+    proj_id = session_state.get("active_project_id")
+    scan_id = str(uuid.uuid4())
+    ai_scan_jobs[scan_id] = {
+        "id": scan_id,
+        "project_id": proj_id,
+        "status": "running",
+        "stage": "initializing",
+        "stage_name": "Initializing AI Pipeline",
+        "progress": 5,
+        "message": "Starting multi-signal AI highlight discovery...",
+        "clips": [],
+        "cancelled": False,
+        "error": None
+    }
+
+    bg_tasks.add_task(run_ai_scan_task, scan_id, req, v_path, proj_id)
+    return {
+        "scan_id": scan_id,
+        "status": "started",
+        "message": "AI highlight discovery started in background"
+    }
+
+@app.get("/api/ai/scan/{scan_id}")
+def get_ai_scan_status(scan_id: str):
+    """Returns real-time progress and discovered candidates for an AI scan job."""
+    job = ai_scan_jobs.get(scan_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="AI scan job not found")
+    return job
+
+@app.post("/api/ai/scan/{scan_id}/cancel")
+def cancel_ai_scan(scan_id: str):
+    """Gracefully cancels an active AI scan job."""
+    job = ai_scan_jobs.get(scan_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="AI scan job not found")
+    job["cancelled"] = True
+    job["status"] = "cancelled"
+    job["message"] = "Scan cancelled by user"
+    return {"status": "cancelled", "scan_id": scan_id}
+
+@app.get("/api/ai/highlights/{project_id}")
+def get_project_highlights(project_id: str):
+    """Retrieves saved clip moments and HQS metadata from SQLite for a project."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT * FROM clip_moments WHERE project_id = ? ORDER BY highlight_score DESC, start_time ASC
+        """, (project_id,))
+        rows = cursor.fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            if d.get("detection_metadata_json"):
+                try:
+                    meta = json.loads(d["detection_metadata_json"])
+                    for k, v in meta.items():
+                        if k not in d:
+                            d[k] = v
+                except Exception:
+                    pass
+            d["hqs"] = d.get("highlight_score", 0.0)
+            results.append(d)
+        return {"clips": results, "total": len(results)}
+
+@app.put("/api/ai/highlights/{moment_id}")
+def update_highlight_moment(moment_id: str, req: UpdateClipMomentRequest):
+    """Updates boundaries, category, or selection status of a saved highlight moment."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clip_moments WHERE id = ?", (moment_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Highlight moment not found")
+
+        updates = []
+        params = []
+        if req.start_time is not None:
+            updates.append("start_time = ?")
+            params.append(req.start_time)
+        if req.end_time is not None:
+            updates.append("end_time = ?")
+            params.append(req.end_time)
+        if req.category is not None:
+            updates.append("category = ?")
+            params.append(req.category)
+        if req.hook_text is not None:
+            updates.append("hook_text = ?")
+            params.append(req.hook_text)
+        if req.selected is not None:
+            updates.append("selected = ?")
+            params.append(1 if req.selected else 0)
+
+        if updates:
+            params.append(moment_id)
+            cursor.execute(f"UPDATE clip_moments SET {', '.join(updates)} WHERE id = ?", params)
+
+        cursor.execute("SELECT * FROM clip_moments WHERE id = ?", (moment_id,))
+        updated_row = dict(cursor.fetchone())
+        return {"status": "updated", "moment": updated_row}
+
+@app.get("/api/ai/models")
+def get_ai_models():
+    """Returns installed Ollama models, supported Whisper models, and hardware capabilities."""
+    ollama_models = get_available_ollama_models()
+    whisper_models = ["tiny", "base", "small", "medium"]
+    
+    cuda_avail = False
+    try:
+        import ctranslate2
+        cuda_avail = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        pass
+
+    default_m = ollama_models[0] if ollama_models else "llama3.2:latest"
+    return {
+        "status": "online",
+        "models": ollama_models,
+        "default": default_m,
+        "ollama_models": ollama_models,
+        "default_ollama_model": default_m,
+        "whisper_models": whisper_models,
+        "default_whisper_model": "small",
+        "cuda_available": cuda_avail,
+        "game_types": list(GAME_PRESETS.keys())
+    }
+
+@app.get("/api/ai/health")
+def get_ai_health():
+    """Returns local AI health status for Ollama and Faster-Whisper."""
+    ollama_online = False
+    ollama_models = []
+    try:
+        ollama_models = get_available_ollama_models()
+        ollama_online = len(ollama_models) > 0
+    except Exception:
+        pass
+
+    cuda_online = False
+    try:
+        import ctranslate2
+        cuda_online = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        pass
+
+    return {
+        "status": "online" if (ollama_online or cuda_online) else "degraded",
+        "ollama_online": ollama_online,
+        "ollama_models_count": len(ollama_models),
+        "whisper_cuda_online": cuda_online,
+        "modules": {
+            "audio_intelligence": True,
+            "visual_intelligence": True,
+            "multimodal_fusion": True,
+            "whisper": cuda_online,
+            "ollama": ollama_online
+        }
+    }
+
 @app.post("/api/highlights/scan")
 def scan_highlights(req: ScanHighlightsRequest):
-    """Scans audio with Faster-Whisper on GPU and discovers highlights using Ollama."""
-    v_path = session_state.get("video_path")
+    """
+    Synchronous multi-signal AI highlight discovery route (backward compatibility).
+    Fuses Audio reactions + Faster-Whisper + OpenCV visual motion + Ollama.
+    """
+    v_path = req.video_path or session_state.get("video_path")
     if not v_path or not os.path.exists(v_path):
         raise HTTPException(status_code=400, detail="No active video")
 
     try:
-        p = ShortsPipeline()
         v_base = os.path.splitext(os.path.basename(v_path))[0]
         audio_file = os.path.join(AUDIO_DIR, f"{v_base}.wav")
         if not os.path.exists(audio_file):
             extract_audio(v_path, audio_file)
 
+        # 1. Audio Intelligence
+        audio_signals = analyze_audio_signals(v_path, CACHE_DIR)
+
+        # 2. Faster-Whisper Transcription with VRAM release
         cache_file = os.path.join(CACHE_DIR, f"{v_base}_transcript.json")
         t_data = AudioTranscriber.load_cache(cache_file)
         if not t_data:
-            p.transcriber = AudioTranscriber(model_size=p.whisper_model_name)
-            t_data = p.transcriber.transcribe(audio_file)
-            AudioTranscriber.save_cache(t_data, cache_file)
+            transcriber = AudioTranscriber(model_size=req.whisper_model)
+            try:
+                t_data = transcriber.transcribe(audio_file)
+                AudioTranscriber.save_cache(t_data, cache_file)
+            finally:
+                transcriber.release_vram()
 
-        h_detector = HighlightDetector(model_name=p.ollama_model_name)
+        # 3. Visual Intelligence
+        visual_signals = analyze_visual_signals(
+            v_path,
+            CACHE_DIR,
+            game_type=req.game_type,
+            audio_events=audio_signals.get("audio_events")
+        )
+
+        # 4. Ollama & Multi-Signal Fusion
+        h_detector = HighlightDetector(model_name=req.ollama_model)
         clips = h_detector.find_highlights(
-            t_data,
+            transcript_data=t_data,
+            audio_signals=audio_signals,
+            visual_signals=visual_signals,
             num_clips=req.num_clips,
             min_duration=req.min_duration,
             max_duration=req.max_duration,
-            scan_start=req.scan_start
+            scan_start=req.scan_start,
+            game_type=req.game_type,
+            sensitivity=req.sensitivity
         )
 
         session_state["discovered_clips"] = clips
@@ -785,19 +1136,21 @@ def scan_highlights(req: ScanHighlightsRequest):
                     media_id = m_row["id"] if m_row else None
                     for c in clips:
                         c_id = str(uuid.uuid4())
+                        c["id"] = c_id
                         cursor.execute("""
                         INSERT INTO clip_moments (
-                            id, project_id, media_asset_id, start_time, end_time, category, hook_text, highlight_score, selected, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            id, project_id, media_asset_id, start_time, end_time, category, hook_text, highlight_score, detection_metadata_json, selected, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             c_id,
                             proj_id,
                             media_id,
                             float(c.get("start", 0.0)),
                             float(c.get("end", 30.0)),
-                            str(c.get("label", "Highlight")),
-                            str(c.get("reason", ""))[:120],
-                            float(c.get("score", 8.0)),
+                            str(c.get("tags", ["Highlight"])[0]),
+                            str(c.get("hook_text", c.get("title", "")))[:150],
+                            float(c.get("hqs", c.get("score", 8.0) * 10.0)),
+                            json.dumps(c),
                             1,
                             utc_now_iso()
                         ))

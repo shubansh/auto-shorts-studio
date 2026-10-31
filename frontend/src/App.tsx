@@ -21,7 +21,9 @@ import type {
   SystemMetrics,
   Project,
   ProjectState,
-  SceneKeyframe
+  SceneKeyframe,
+  AIScanJobStatus,
+  AIScanOptions
 } from './types';
 import { RotateCw } from 'lucide-react';
 
@@ -72,11 +74,14 @@ export function App() {
 
   // Loading & Processing States
   const [isScanning, setIsScanning] = useState(false);
+  const [scanJobStatus, setScanJobStatus] = useState<AIScanJobStatus | null>(null);
+  const [ollamaModels, setOllamaModels] = useState<string[]>(['llama3.2:latest', 'qwen2.5:3b']);
   const [isRendering, setIsRendering] = useState(false);
   const [renderStatusMsg, setRenderStatusMsg] = useState('');
   const [renderProgress, setRenderProgress] = useState(0);
 
   const pollIntervalRef = useRef<number | null>(null);
+  const scanPollIntervalRef = useRef<number | null>(null);
   const metricsIntervalRef = useRef<number | null>(null);
 
   // 1. Initial Load: Fetch Session, Projects, Local Files, Library & Real Telemetry
@@ -86,6 +91,7 @@ export function App() {
     fetchLocalSessions();
     fetchLibrary();
     fetchSystemMetrics();
+    fetchOllamaModels();
 
     // Poll live system hardware metrics every 3.5 seconds
     metricsIntervalRef.current = window.setInterval(fetchSystemMetrics, 3500);
@@ -93,9 +99,24 @@ export function App() {
     return () => {
       if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (scanPollIntervalRef.current) clearInterval(scanPollIntervalRef.current);
       if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
     };
   }, []);
+
+  const fetchOllamaModels = async () => {
+    try {
+      const res = await fetch('/api/ai/models');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.models) && data.models.length > 0) {
+          setOllamaModels(data.models);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load Ollama models:', e);
+    }
+  };
 
   const fetchSystemMetrics = async () => {
     try {
@@ -412,36 +433,79 @@ export function App() {
     return data.url;
   };
 
-  // 11. Scan Highlights (Ollama + Whisper)
-  const handleScanHighlights = async (
-    numClips: number,
-    minDur: number,
-    maxDur: number,
-    scanStart: number
-  ) => {
+  // 11. Multi-Signal AI Highlight Intelligence Scan (Phase 5 Background Pipeline)
+  const handleScanHighlights = async (options: AIScanOptions) => {
     setIsScanning(true);
+    setScanJobStatus(null);
     try {
-      const res = await fetch('/api/highlights/scan', {
+      const res = await fetch('/api/ai/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          num_clips: numClips,
-          min_duration: minDur,
-          max_duration: maxDur,
-          scan_start: scanStart
+          video_path: session?.video_path,
+          num_clips: options.num_clips,
+          min_duration: options.min_duration,
+          max_duration: options.max_duration,
+          scan_start: options.scan_start,
+          game_type: options.game_type,
+          whisper_model: options.whisper_model,
+          ollama_model: options.ollama_model,
+          sensitivity: options.sensitivity
         })
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.detail || 'Highlight scan failed');
+        throw new Error(err.detail || 'Highlight scan failed to start');
       }
       const data = await res.json();
-      setSession((prev) => (prev ? { ...prev, discovered_clips: data.clips } : null));
-      await fetchProjects();
+      const scanId = data.scan_id;
+
+      if (scanPollIntervalRef.current) clearInterval(scanPollIntervalRef.current);
+
+      scanPollIntervalRef.current = window.setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/ai/scan/${scanId}`);
+          if (pollRes.ok) {
+            const job: AIScanJobStatus = await pollRes.json();
+            setScanJobStatus(job);
+
+            if (job.status === 'completed') {
+              if (scanPollIntervalRef.current) clearInterval(scanPollIntervalRef.current);
+              setIsScanning(false);
+              if (job.clips && job.clips.length > 0) {
+                setSession((prev) => (prev ? { ...prev, discovered_clips: job.clips! } : null));
+              }
+              await fetchProjects();
+            } else if (job.status === 'failed' || job.status === 'cancelled') {
+              if (scanPollIntervalRef.current) clearInterval(scanPollIntervalRef.current);
+              setIsScanning(false);
+              if (job.status === 'failed') {
+                alert(`AI Highlight Scan Failed: ${job.error || job.message}`);
+              }
+            }
+          }
+        } catch (pollErr) {
+          console.warn('Scan polling error:', pollErr);
+        }
+      }, 750);
     } catch (err: any) {
       alert(`Scanning Error: ${err.message}`);
-    } finally {
       setIsScanning(false);
+    }
+  };
+
+  const handleCancelScan = async () => {
+    if (scanJobStatus?.id) {
+      try {
+        await fetch(`/api/ai/scan/${scanJobStatus.id}/cancel`, { method: 'POST' });
+        if (scanPollIntervalRef.current) clearInterval(scanPollIntervalRef.current);
+        setIsScanning(false);
+        setScanJobStatus((prev) =>
+          prev ? { ...prev, status: 'cancelled', message: 'Scan cancelled by user.' } : null
+        );
+      } catch (err) {
+        console.warn('Failed to cancel scan:', err);
+      }
     }
   };
 
@@ -641,6 +705,9 @@ export function App() {
               onTriggerRender={handleTriggerRender}
               setActiveTab={setActiveTab}
               isScanning={isScanning}
+              scanJobStatus={scanJobStatus}
+              onCancelScan={handleCancelScan}
+              ollamaModels={ollamaModels}
               isRendering={isRendering}
             />
           )}

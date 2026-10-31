@@ -4,6 +4,7 @@ import os
 import sys
 import wave
 import io
+from typing import Optional, List, Dict, Any
 import numpy as np
 import torch
 import ctranslate2
@@ -106,9 +107,10 @@ class AudioTranscriber:
             else:
                 raise e
 
-    def transcribe(self, audio_path: str, language=None) -> dict:
+    def transcribe(self, audio_path: str, language=None, initial_prompt: Optional[str] = None) -> dict:
         """
         Transcribes audio with word-level timestamps.
+        Supports Hindi, English, and Hinglish gaming terms via prompt hints.
         Passes loaded float32 numpy array to bypass any PyAV container errors.
         """
         logger.info(f"Starting transcription for {audio_path}...")
@@ -119,13 +121,16 @@ class AudioTranscriber:
         else:
             audio_input = audio_path
 
+        gaming_prompt = initial_prompt or "Gaming stream with commentary: clutch, headshot, kill, mara, revive, rush, bhai, OP, GG, victory, laughter."
+
         try:
             segments_generator, info = self.model.transcribe(
                 audio_input,
                 language=language,
                 word_timestamps=True,
+                initial_prompt=gaming_prompt,
                 vad_filter=True, # Skip silences
-                vad_parameters=dict(min_silence_duration_ms=500)
+                vad_parameters=dict(min_silence_duration_ms=400)
             )
             # Try to fetch first segment to trigger any CUDA kernel errors early
             segments_list = list(segments_generator)
@@ -139,8 +144,9 @@ class AudioTranscriber:
                     audio_input,
                     language=language,
                     word_timestamps=True,
+                    initial_prompt=gaming_prompt,
                     vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=500)
+                    vad_parameters=dict(min_silence_duration_ms=400)
                 )
                 segments_list = list(segments_generator)
             else:
@@ -180,6 +186,20 @@ class AudioTranscriber:
             "segments": segments_data
         }
         return result
+
+    def release_vram(self):
+        """Releases Faster-Whisper model from GPU memory to free VRAM for other tasks."""
+        if hasattr(self, "model") and self.model:
+            del self.model
+            self.model = None
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        import gc
+        gc.collect()
+        logger.info("Faster-Whisper VRAM resources released.")
 
     @staticmethod
     def save_cache(data: dict, cache_path: str):
