@@ -55,7 +55,7 @@ def get_nearest_keyframe(video_path: str, timestamp: float) -> float:
         "ffprobe", "-v", "error",
         "-read_intervals", f"{start_seek}%+{end_seek}",
         "-select_streams", "v:0",
-        "-show_entries", "frame=key_frame,pkt_pts_time",
+        "-show_entries", "frame=key_frame,pts_time,pkt_pts_time",
         "-of", "json",
         video_path
     ]
@@ -65,8 +65,9 @@ def get_nearest_keyframe(video_path: str, timestamp: float) -> float:
             data = json.loads(res.stdout)
             keyframes = []
             for f in data.get("frames", []):
-                if f.get("key_frame") == 1 and "pkt_pts_time" in f:
-                    keyframes.append(float(f["pkt_pts_time"]))
+                t_val = f.get("pts_time") or f.get("pkt_pts_time")
+                if f.get("key_frame") == 1 and t_val is not None:
+                    keyframes.append(float(t_val))
             if keyframes:
                 prior = [k for k in keyframes if k <= timestamp]
                 if prior:

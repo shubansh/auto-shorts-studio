@@ -67,6 +67,8 @@ export function App() {
   // Persistence & Autosave Status
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const saveTimeoutRef = useRef<number | null>(null);
+  const isInitialMount = useRef<boolean>(true);
+  const isProjectSwitching = useRef<boolean>(false);
 
   // Loading & Processing States
   const [isScanning, setIsScanning] = useState(false);
@@ -114,10 +116,6 @@ export function App() {
       if (res.ok) {
         const data: Project[] = await res.json();
         setProjects(data);
-        if (data.length > 0 && !activeProject) {
-          const matched = data.find((p) => p.id === session?.active_project_id) || data[0];
-          setActiveProject(matched);
-        }
       }
     } catch (err) {
       console.warn('Failed to load persistent projects:', err);
@@ -138,6 +136,38 @@ export function App() {
       console.error('Failed to load session:', err);
     }
   };
+
+  // Synchronize activeProject with session.active_project_id and projects list
+  useEffect(() => {
+    if (projects.length === 0) return;
+    if (session?.active_project_id) {
+      const matched = projects.find((p) => p.id === session.active_project_id);
+      if (matched && (!activeProject || activeProject.id !== matched.id)) {
+        isProjectSwitching.current = true;
+        setActiveProject(matched);
+        const state = matched.project_state;
+        if (state) {
+          if (state.layout?.mode) setScreenMode(state.layout.mode);
+          if (state.layout?.gaming_config) {
+            setGamingConfig((prev) => ({ ...prev, ...state.layout.gaming_config }));
+          }
+          if (state.layout?.single_crop_config) {
+            setSingleCropConfig(state.layout.single_crop_config);
+          }
+          if (state.captions?.theme) setSubtitleTheme(state.captions.theme);
+          if (typeof state.captions?.enable_emojis === 'boolean') {
+            setEnableEmojis(state.captions.enable_emojis);
+          }
+          if (state.scene_keyframes) {
+            setSceneKeyframes(state.scene_keyframes);
+          }
+        }
+      }
+    } else if (!activeProject && projects.length > 0) {
+      isProjectSwitching.current = true;
+      setActiveProject(projects[0]);
+    }
+  }, [session?.active_project_id, projects]);
 
   const fetchLocalSessions = async () => {
     try {
@@ -169,6 +199,7 @@ export function App() {
       const res = await fetch(`/api/projects/${projectId}`);
       if (res.ok) {
         const proj: Project = await res.json();
+        isProjectSwitching.current = true;
         setActiveProject(proj);
         const state = proj.project_state;
         if (state) {
@@ -199,6 +230,16 @@ export function App() {
   // 3. Debounced Non-Destructive Autosave
   useEffect(() => {
     if (!activeProject) return;
+
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    if (isProjectSwitching.current) {
+      isProjectSwitching.current = false;
+      return;
+    }
 
     if (saveTimeoutRef.current) {
       window.clearTimeout(saveTimeoutRef.current);

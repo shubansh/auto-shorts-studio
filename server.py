@@ -270,6 +270,30 @@ async def get_system_metrics():
 def get_session():
     """Returns active editing session metadata, thumbnails, preview URLs, and SQLite project ID."""
     v_path = session_state.get("video_path")
+    
+    # Auto-resolve active_project_id from SQLite database if missing or out-of-sync
+    curr_proj_id = session_state.get("active_project_id")
+    if curr_proj_id:
+        if not get_project_by_id(curr_proj_id):
+            curr_proj_id = None
+            session_state["active_project_id"] = None
+
+    if not curr_proj_id and v_path and os.path.exists(v_path):
+        fn = os.path.basename(v_path)
+        all_projs = get_all_projects()
+        for p in all_projs:
+            if p.get("media_filename") == fn:
+                session_state["active_project_id"] = p["id"]
+                curr_proj_id = p["id"]
+                break
+        if not curr_proj_id:
+            migrate_existing_uploads_to_projects()
+            for p in get_all_projects():
+                if p.get("media_filename") == fn:
+                    session_state["active_project_id"] = p["id"]
+                    curr_proj_id = p["id"]
+                    break
+
     v_url = None
     p_url = None
     thumbs_urls = []

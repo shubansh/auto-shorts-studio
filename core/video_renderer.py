@@ -45,10 +45,6 @@ class VideoRenderer:
             ]
         elif layout_mode == "gaming_split":
             # Powder.gg gaming layout: Facecam on top, Gameplay on bottom
-            facecam = crop_info.get("facecam", {"x": 1300, "y": 50, "w": 580, "h": 460})
-            gameplay = crop_info.get("gameplay", {"x": 420, "y": 0, "w": 1080, "h": 1080})
-            
-            # Retrieve video dimensions to guarantee valid crop bounds
             from core.audio import get_video_info
             try:
                 v_meta = get_video_info(abs_video_path)
@@ -56,15 +52,40 @@ class VideoRenderer:
             except Exception:
                 in_w, in_h = 1920, 1080
 
-            fx = max(0, min(in_w - 50, int(facecam.get("x", 1300))))
-            fy = max(0, min(in_h - 50, int(facecam.get("y", 50))))
-            fw = max(50, min(in_w - fx, int(facecam.get("w", 580))))
-            fh = max(50, min(in_h - fy, int(facecam.get("h", 460))))
+            # Support normalized 0-100% coordinates from React Layout Studio
+            if "face_x" in crop_info:
+                fx = int((crop_info.get("face_x", 65) / 100.0) * in_w)
+                fy = int((crop_info.get("face_y", 58) / 100.0) * in_h)
+                fw = int((crop_info.get("face_w", 33) / 100.0) * in_w)
+                fh = int((crop_info.get("face_h", 40) / 100.0) * in_h)
+                gx = int((crop_info.get("game_x", 5) / 100.0) * in_w)
+                gy = int((crop_info.get("game_y", 5) / 100.0) * in_h)
+                gw = int((crop_info.get("game_w", 90) / 100.0) * in_w)
+                gh = int((crop_info.get("game_h", 90) / 100.0) * in_h)
+                face_pct = crop_info.get("face_height_pct", 40)
+                top_h = int((face_pct / 100.0) * self.target_height)
+            else:
+                facecam = crop_info.get("facecam", {"x": 1300, "y": 50, "w": 580, "h": 460})
+                gameplay = crop_info.get("gameplay", {"x": 420, "y": 0, "w": 1080, "h": 1080})
+                fx = max(0, min(in_w - 50, int(facecam.get("x", 1300))))
+                fy = max(0, min(in_h - 50, int(facecam.get("y", 50))))
+                fw = max(50, min(in_w - fx, int(facecam.get("w", 580))))
+                fh = max(50, min(in_h - fy, int(facecam.get("h", 460))))
+                gx = max(0, min(in_w - 50, int(gameplay.get("x", 420))))
+                gy = max(0, min(in_h - 50, int(gameplay.get("y", 0))))
+                gw = max(50, min(in_w - gx, int(gameplay.get("w", 1080))))
+                gh = max(50, min(in_h - gy, int(gameplay.get("h", 1080))))
+                top_h = int(crop_info.get("top_height", 760))
 
-            gx = max(0, min(in_w - 50, int(gameplay.get("x", 420))))
-            gy = max(0, min(in_h - 50, int(gameplay.get("y", 0))))
-            gw = max(50, min(in_w - gx, int(gameplay.get("w", 1080))))
-            gh = max(50, min(in_h - gy, int(gameplay.get("h", 1080))))
+            # Clamp boundaries
+            fx = max(0, min(in_w - 50, fx))
+            fy = max(0, min(in_h - 50, fy))
+            fw = max(50, min(in_w - fx, fw))
+            fh = max(50, min(in_h - fy, fh))
+            gx = max(0, min(in_w - 50, gx))
+            gy = max(0, min(in_h - 50, gy))
+            gw = max(50, min(in_w - gx, gw))
+            gh = max(50, min(in_h - gy, gh))
 
             # Make dimensions even
             if fw % 2 != 0: fw -= 1
@@ -72,7 +93,6 @@ class VideoRenderer:
             if gw % 2 != 0: gw -= 1
             if gh % 2 != 0: gh -= 1
 
-            top_h = int(crop_info.get("top_height", 760))
             if top_h % 2 != 0: top_h += 1
             bot_h = self.target_height - top_h
             if bot_h % 2 != 0: bot_h -= 1
@@ -87,10 +107,28 @@ class VideoRenderer:
             ]
         else:
             # Smart crop mode
-            crop_w = crop_info.get("crop_w", 608)
-            crop_h = crop_info.get("crop_h", 1080)
-            crop_x = crop_info.get("crop_x", 0)
-            crop_y = crop_info.get("crop_y", 0)
+            from core.audio import get_video_info
+            try:
+                v_meta = get_video_info(abs_video_path)
+                in_w, in_h = v_meta["width"], v_meta["height"]
+            except Exception:
+                in_w, in_h = 1920, 1080
+
+            if "crop_x" in crop_info and crop_info.get("crop_x", 0) <= 100 and crop_info.get("crop_w", 100) <= 100:
+                crop_x = int((crop_info["crop_x"] / 100.0) * in_w)
+                crop_y = int((crop_info.get("crop_y", 0) / 100.0) * in_h)
+                crop_w = int((crop_info.get("crop_w", 44) / 100.0) * in_w)
+                crop_h = int((crop_info.get("crop_h", 100) / 100.0) * in_h)
+            else:
+                crop_w = crop_info.get("crop_w", 608)
+                crop_h = crop_info.get("crop_h", 1080)
+                crop_x = crop_info.get("crop_x", 0)
+                crop_y = crop_info.get("crop_y", 0)
+
+            crop_w = max(50, min(in_w - crop_x, int(crop_w)))
+            crop_h = max(50, min(in_h - crop_y, int(crop_h)))
+            if crop_w % 2 != 0: crop_w -= 1
+            if crop_h % 2 != 0: crop_h -= 1
 
             filter_str = (
                 f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},"
